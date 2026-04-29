@@ -29,7 +29,10 @@ import pytest
 # ---------------------------------------------------------------------------
 # Ensure src is importable
 # ---------------------------------------------------------------------------
-_SRC = str(Path(__file__).resolve().parent.parent)
+_ROOT = str(Path(__file__).resolve().parent.parent)
+_SRC = str(Path(__file__).resolve().parent.parent / "src")
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
