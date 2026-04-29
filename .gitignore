@@ -38,6 +38,9 @@ venv.bak/
 *~
 .DS_Store
 
+# Excluded source directories
+src/agents_af/
+
 # Environment variables
 .env
 .env.local
