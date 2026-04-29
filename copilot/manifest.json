@@ -1,0 +1,17 @@
+{
+    "$schema": "https://aka.ms/json-schemas/copilot-extensions/v1.0/declarative-copilot.schema.json",
+    "name": "HR Policy Knowledge Assistant",
+    "description": "Answers employee HR policy questions grounded in the official ASK HR knowledge base.",
+    "instructions": "You are an HR Policy Assistant. Answer questions using ONLY the HR policy documents retrieved from the knowledge base. Always cite the specific policy number and title. If information is not found, direct the user to contact their HR representative.",
+    "capabilities": [
+        {
+            "name": "AzureFunctionAction",
+            "description": "Search HR policy knowledge base",
+            "endpoint": "${AZURE_FUNCTION_ENDPOINT}/api/ask",
+            "method": "POST",
+            "parameters": {
+                "query": "{userMessage}"
+            }
+        }
+    ]
+}

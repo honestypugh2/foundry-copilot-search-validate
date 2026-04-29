@@ -1,0 +1,76 @@
+openapi: 3.0.3
+info:
+  title: HR Policy Knowledge Lab API
+  description: >
+    REST API for the HR Policy Knowledge sequential agent pipeline.
+    Searches Azure AI Search, validates sources, and returns grounded
+    citations from the ASK HR knowledge base.
+  version: "1.0.0"
+
+servers:
+  - url: https://func-hr-policy-kb-lab-dev.azurewebsites.net
+    description: Azure Function App (deployed)
+
+paths:
+  /api/ask:
+    post:
+      operationId: askHRPolicy
+      summary: Ask an HR policy question
+      description: >
+        Runs the sequential orchestrator pipeline
+        (Retrieval → Source Validation → Reference Validation)
+        and returns grounded, citation-backed results.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Natural-language HR policy question
+                  example: "Find Policy 51350 on Paid Time Off"
+      responses:
+        "200":
+          description: Successful grounded response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: completed
+                  user_query:
+                    type: string
+                  matches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        content:
+                          type: string
+                        filePath:
+                          type: string
+                        documentType:
+                          type: string
+                        container:
+                          type: string
+                  references:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        filePath:
+                          type: string
+                        documentType:
+                          type: string
+                  is_grounded:
+                    type: boolean
+        "400":
+          description: Invalid request
+        "500":
+          description: Internal server error

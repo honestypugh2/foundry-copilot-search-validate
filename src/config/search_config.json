@@ -1,0 +1,141 @@
+{
+    "search_config": {
+        "index_name": "hr_lab_index",
+        "semantic_configuration": "hr-lab-semantic-config",
+        "vector_field": "snippet_vector",
+        "content_field": "snippet",
+        "source_field": "snippet_with_source",
+        "blob_url_field": "blob_url",
+        "parent_key_field": "snippet_parent_id",
+        "filename_field": "metadata_storage_name",
+        "filepath_field": "metadata_storage_path",
+        "parent_title_field": "parent_title",
+        "policy_number_field": "policy_number",
+        "top_k": 5
+    },
+    "vector_search": {
+        "algorithm": {
+            "name": "hr-lab-hnsw-config",
+            "kind": "hnsw",
+            "parameters": {
+                "metric": "cosine",
+                "m": 4,
+                "efConstruction": 400,
+                "efSearch": 500
+            }
+        },
+        "compression": {
+            "name": "hr-lab-scalar-quantization",
+            "kind": "scalarQuantization",
+            "parameters": {
+                "quantized_data_type": "int8"
+            },
+            "rescoring_options": {
+                "enable_rescoring": true,
+                "default_oversampling": 4
+            }
+        },
+        "profile": {
+            "name": "hr-lab-vector-profile",
+            "algorithm_configuration_name": "hr-lab-hnsw-config",
+            "compression_name": "hr-lab-scalar-quantization"
+        }
+    },
+    "semantic_search": {
+        "configuration_name": "hr-lab-semantic-config",
+        "reranker": "BoostedRerankerScore",
+        "prioritized_fields": {
+            "title_field": "parent_title",
+            "content_fields": ["snippet"],
+            "keywords_fields": ["policy_number"]
+        }
+    },
+    "skillset": {
+        "name": "hr-lab-skillset",
+        "skills": [
+            {
+                "type": "ContentUnderstandingSkill",
+                "name": "contentUnderstandingSkill",
+                "extraction_options": ["images", "locationMetadata"],
+                "outputs": ["text_sections", "normalized_images"]
+            },
+            {
+                "type": "MergeSkill",
+                "name": "mergeSkill",
+                "description": "Merge text_sections content with blob_url for snippet_with_source"
+            },
+            {
+                "type": "AzureOpenAIEmbeddingSkill",
+                "name": "AzureOpenAIEmbeddingSkill",
+                "deployment_id": "text-embedding-3-small",
+                "dimensions": 1536,
+                "model_name": "text-embedding-3-small"
+            }
+        ],
+        "chunking": {
+            "unit": "characters",
+            "maximum_length": 2000,
+            "overlap_length": 200
+        },
+        "index_projections": {
+            "target_index_name": "hr_lab_index",
+            "parent_key_field_name": "snippet_parent_id",
+            "source_context": "/document/text_sections/*",
+            "mappings": [
+                {"name": "snippet_vector", "source": "/document/text_sections/*/text_vector"},
+                {"name": "snippet", "source": "/document/text_sections/*/content"},
+                {"name": "blob_url", "source": "/document/metadata_storage_path"},
+                {"name": "metadata_storage_name", "source": "/document/metadata_storage_name"},
+                {"name": "metadata_storage_path", "source": "/document/metadata_storage_path"},
+                {"name": "parent_title", "source": "/document/parent_title"},
+                {"name": "policy_number", "source": "/document/policy_number"}
+            ]
+        },
+        "cognitive_services": {
+            "type": "AIServicesByKey",
+            "description": "AI Services for knowledge source"
+        },
+        "excluded_extensions": [".vsd", ".vsdx", ".mpp"]
+    },
+    "agentic_retrieval": {
+        "knowledge_source_name": "hr-knowledge-source",
+        "knowledge_source_description": "Knowledge source for HR policy documents indexed in hr_lab_index",
+        "knowledge_base_name": "hr-knowledge-base",
+        "output_mode": "ANSWER_SYNTHESIS",
+        "retrieval_reasoning_effort": "medium",
+        "search_fields": [
+            "snippet",
+            "parent_title",
+            "policy_number"
+        ],
+        "semantic_configuration_name": "hr-lab-semantic-config",
+        "source_data_fields": [
+            "id",
+            "snippet",
+            "metadata_storage_name",
+            "metadata_storage_path",
+            "parent_title",
+            "policy_number",
+            "blob_url"
+        ],
+        "include_references": true,
+        "include_reference_source_data": true,
+        "always_query_source": true,
+        "include_activity": true,
+        "mcp": {
+            "project_connection_name": "hr-knowledge-mcp-connection",
+            "api_version": "2025-11-01-Preview"
+        }
+    },
+    "blob_storage": {
+        "container_name": "ask-hr-knowledge",
+        "description": "Azure Blob Storage container for HR policy documents"
+    },
+    "foundry_agent": {
+        "model": "gpt-5",
+        "output_mode": "answerSynthesis",
+        "retrieval_reasoning": "medium",
+        "retrieval_instructions": "Use only the connected knowledge sources. Do not answer from general knowledge.\nPrimary objective: maximize recall of HR-policy-related evidence. Retrieve documents that are directly relevant to the user's query and also documents that mention the queried policy number, topic, leave type, dress code, IT policy, hiring procedure, or operational matter indirectly.\nAlways search across all connected knowledge sources.\nExpand search broadly using likely HR policy variants, policy-number variants, document-type variants, and common employee terminology where relevant.\nDo not suppress weak matches. Keep potentially relevant results so the answering layer can label them appropriately.\nPrefer retrieving the actual source documents when available, not only documents that reference them. If filenames or exact document titles appear in retrieved content, prioritize those exact files as well.\nPreserve exact filenames, source paths, and metadata exactly as stored when available. Do not invent filenames, paths, or document identifiers.\nIf evidence is not found in the connected knowledge sources, say so clearly.",
+        "answer_instructions": "Provide grounded evidence only from the connected knowledge sources.\nDo not use general knowledge. Do not fabricate filenames, paths, or document details.\nPreserve exact filenames exactly as retrieved.\nTreat this distinction as critical:\n- ✅ retrieved = the file itself was directly returned\n- ⚠️ referenced only = the filename is only mentioned inside retrieved content\n- what was found\n- where it was found\n- whether the file was directly retrieved or only referenced\nIf a source path is available, preserve it exactly as retrieved.\nIf the requested evidence was not directly found, say so clearly.\nPrefer concise, practical answers that help the user identify the relevant HR policy, citing the policy number (e.g., Policy 51350) and title."
+    }
+}
