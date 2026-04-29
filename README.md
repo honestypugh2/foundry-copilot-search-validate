@@ -1,9 +1,10 @@
-# HR Policy Knowledge Base Lab
+# Foundry Copilot Search Validate
 
-Agentic retrieval pipeline for answering employee HR policy questions, grounded in
-the **ASK HR** knowledge base stored in Azure Blob Storage and indexed via
-Azure AI Search with integrated vectorization. Uses a **Foundry Agent with MCP**
-(Model Context Protocol) to retrieve, reason, and cite in a single pass.
+End-to-end agentic retrieval pipeline using Azure AI Foundry Agents, Azure AI Search
+(MCP), and Copilot Studio — with built-in citation validation and evaluation harness.
+Documents are stored in Azure Blob Storage and indexed via Azure AI Search with
+integrated vectorization. Uses a **Foundry Agent with MCP** (Model Context Protocol)
+to retrieve, reason, and cite in a single pass.
 
 ## Architecture
 

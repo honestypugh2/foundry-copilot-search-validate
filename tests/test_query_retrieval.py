@@ -93,7 +93,9 @@ TEST_CASES: list[QueryTestCase] = [
 
 def _mock_results_for(tc: QueryTestCase) -> list[dict[str, Any]]:
     """Return synthetic search hits for a test case in mock mode."""
-    blob_base = "https://stovcrqidayerac.blob.core.windows.net/ask-hr-knowledge/knowledge_base_lab"
+    storage_url = os.environ.get("AZURE_STORAGE_ACCOUNT_URL", "https://your-storage.blob.core.windows.net")
+    container = os.environ.get("AZURE_STORAGE_CONTAINER_NAME", "your-container")
+    blob_base = f"{storage_url.rstrip('/')}/{container}/knowledge_base_lab"
     file_encoded = tc.expected_file.replace(" ", "%20")
     folder = tc.expected_file.rsplit(".", 1)[0] if "." in tc.expected_file else tc.expected_file
     folder_encoded = folder.replace(" ", "%20")

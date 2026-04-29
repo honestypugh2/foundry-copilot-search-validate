@@ -488,7 +488,7 @@ def step_6_verify_copilot_files() -> None:
     assert manifest_path.exists(), f"Missing: {manifest_path}"
     with open(manifest_path) as f:
         manifest = json.load(f)
-    assert manifest["name"] == "HR Policy Knowledge Assistant"
+    assert manifest["name"] == "Knowledge Base Assistant"
     assert "AzureFunctionAction" in str(manifest["capabilities"])
     logger.info("  ✓ manifest.json: name=%r", manifest["name"])
 

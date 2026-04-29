@@ -225,7 +225,7 @@ class TestCopilotStudioFiles:
         with open(manifest_path) as f:
             manifest = json.load(f)
 
-        assert manifest["name"] == "HR Policy Knowledge Assistant"
+        assert manifest["name"] == "Knowledge Base Assistant"
         assert any(
             "AzureFunctionAction" in str(cap)
             for cap in manifest["capabilities"]

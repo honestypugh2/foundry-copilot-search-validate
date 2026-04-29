@@ -75,6 +75,7 @@ logs/
 .coverage
 htmlcov/
 .tox/
+tests/*_results.json
 
 # Node.js (for React app)
 node_modules/

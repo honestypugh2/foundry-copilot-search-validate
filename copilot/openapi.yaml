@@ -2,13 +2,13 @@ openapi: 3.0.3
 info:
   title: HR Policy Knowledge Lab API
   description: >
-    REST API for the HR Policy Knowledge sequential agent pipeline.
+    REST API for the agentic retrieval sequential pipeline.
     Searches Azure AI Search, validates sources, and returns grounded
-    citations from the ASK HR knowledge base.
+    citations from the knowledge base.
   version: "1.0.0"
 
 servers:
-  - url: https://func-hr-policy-kb-lab-dev.azurewebsites.net
+  - url: https://<your-function-app>.azurewebsites.net
     description: Azure Function App (deployed)
 
 paths:

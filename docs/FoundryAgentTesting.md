@@ -20,13 +20,13 @@ activity — in the [Microsoft Foundry portal](https://ai.azure.com).
 
 ```bash
 # Azure AI Search
-AZURE_SEARCH_ENDPOINT=https://srch-hr-policy-kb-lab-dev-ovcrqidayerac.search.windows.net
-AZURE_SEARCH_INDEX=hr_lab_index
+AZURE_SEARCH_ENDPOINT=https://<your-search-service>.search.windows.net
+AZURE_SEARCH_INDEX=<your-index-name>
 
 # Azure OpenAI
-AZURE_OPENAI_ENDPOINT=https://cog-hr-policy-kb-lab-dev-ovcrqidayerac.openai.azure.com/openai/v1
-GPT_DEPLOYMENT_NAME=gpt-4.1
-GPT_MODEL_NAME=gpt-4.1
+AZURE_OPENAI_ENDPOINT=https://<your-openai-resource>.openai.azure.com/openai/v1
+GPT_DEPLOYMENT_NAME=<your-deployment-name>
+GPT_MODEL_NAME=<your-model-name>
 
 # Azure AI Foundry (required for Steps 2–4: Source Validator, Reference Validator, Answer Synthesis)
 AZURE_AI_PROJECT_ENDPOINT=https://<your-ai-service>.services.ai.azure.com/api/projects/<your-project>
@@ -45,7 +45,7 @@ This verifies query planning, subquery decomposition, semantic ranking,
 and answer synthesis via the Knowledge Base's GPT-4.1 model.
 
 ```bash
-cd /home/brittanypugh/foundry-copilot-hr-policy-knowledge
+cd $PROJECT_ROOT
 source .env
 
 PYTHONPATH=$PWD/src uv run python -c "
@@ -84,7 +84,7 @@ Tests the complete Foundry Agent pipeline: agentic retrieval → source
 validation → reference validation → answer synthesis.
 
 ```bash
-cd /home/brittanypugh/foundry-copilot-hr-policy-knowledge
+cd $PROJECT_ROOT
 source .env
 
 PYTHONPATH=$PWD/src uv run python -c "
@@ -193,7 +193,7 @@ print(f'Answer: {result2[\"answer\"][:200]}')
 The project includes an end-to-end test that exercises the full pipeline:
 
 ```bash
-cd /home/brittanypugh/foundry-copilot-hr-policy-knowledge
+cd $PROJECT_ROOT
 source .env
 
 PYTHONPATH=$PWD/src uv run python src/tests/test_full_flow.py
@@ -263,12 +263,12 @@ Every result should include these metadata fields in each match:
 {
   "content": "# Policy 51350 — Types of Leave_ Paid Time Off (PTO)...",
   "fileName": "51350 - Types of Leave_ Paid Time Off (PTO) (23472_2).docx",
-  "filePath": "https://stovcrqidayerac.blob.core.windows.net/ask-hr-knowledge/knowledge_base_lab/...",
+  "filePath": "https://<your-storage>.blob.core.windows.net/<your-container>/knowledge_base_lab/...",
   "parentTitle": "51350 - Types of Leave_ Paid Time Off (PTO) (23472_2).docx",
   "policyNumber": "51350 - Types of Leave_ Paid Time Off (PTO) (23472_2).docx",
-  "container": "ask-hr-knowledge",
+  "container": "<your-container>",
   "reranker_score": 3.30,
-  "blob_url": "https://stovcrqidayerac.blob.core.windows.net/ask-hr-knowledge/knowledge_base_lab/..."
+  "blob_url": "https://<your-storage>.blob.core.windows.net/<your-container>/knowledge_base_lab/..."
 }
 ```
 
@@ -288,8 +288,8 @@ https://ai.azure.com
 ```
 
 1. Sign in with your Azure credentials
-2. Select your AI Foundry resource (`cog-hr-policy-kb-lab-dev-ovcrqidayerac`)
-3. Select your project (`proj-hr-policy-kb-lab-dev-ovcrqidayerac`)
+2. Select your AI Foundry resource (`<your-ai-foundry-resource>`)
+3. Select your project (`<your-project>`)
 
 ### 2. View Agent Threads & Runs
 
@@ -322,7 +322,6 @@ https://ai.azure.com
 2. Verify your deployments:
    - `gpt-4.1` — used by all Foundry Agents and Knowledge Base answer synthesis
    - `text-embedding-3-small` — used by the indexer skillset for vector embeddings
-   - `gpt-5` — available for advanced reasoning (not used by default)
 
 ### 5. View Knowledge Base (Agentic Retrieval)
 
@@ -369,7 +368,7 @@ For detailed monitoring of the Search + Foundry pipeline:
 Run all key tests in sequence:
 
 ```bash
-cd /home/brittanypugh/foundry-copilot-hr-policy-knowledge
+cd $PROJECT_ROOT
 source .env
 export AZURE_SEARCH_ENDPOINT AZURE_OPENAI_ENDPOINT AZURE_AI_SERVICES_ENDPOINT \
        AZURE_SEARCH_INDEX GPT_DEPLOYMENT_NAME GPT_MODEL_NAME \
