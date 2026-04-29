@@ -143,6 +143,6 @@ src/content_understanding/
 
 local.settings.json
 
-agents_af/*
+src/agents_af/*
 
 tests/*.json
