@@ -13,10 +13,10 @@ against live Azure services:
 
 Usage:
     # Live mode (requires Azure credentials + indexed data)
-    PYTHONPATH=$PWD/src python src/tests/test_e2e_agent_framework.py
+    PYTHONPATH=$PWD/src python tests/test_e2e_agent_framework.py
 
     # Mock mode (validates wiring only)
-    PYTHONPATH=$PWD/src python src/tests/test_e2e_agent_framework.py --mock
+    PYTHONPATH=$PWD/src python tests/test_e2e_agent_framework.py --mock
 
 Environment variables required (live mode):
     AZURE_SEARCH_ENDPOINT, AZURE_OPENAI_ENDPOINT,

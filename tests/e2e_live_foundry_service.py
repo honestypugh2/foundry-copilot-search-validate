@@ -17,11 +17,11 @@ by registering agents via ensure_agent() and querying them.
 Also tests the original AF SequentialBuilder orchestrator for comparison.
 
 Usage:
-    cd foundry-copilot-hr-policy-knowledge
-    PYTHONPATH=$PWD/src python src/tests/e2e_live_foundry_service.py
+    cd foundry-copilot-search-validate
+    PYTHONPATH=$PWD/src python tests/e2e_live_foundry_service.py
 
     # Persist agents in Foundry Portal (don't delete after test):
-    PERSIST_FOUNDRY_AGENTS=true PYTHONPATH=$PWD/src python src/tests/e2e_live_foundry_service.py
+    PERSIST_FOUNDRY_AGENTS=true PYTHONPATH=$PWD/src python tests/e2e_live_foundry_service.py
 
 Environment variables required (from src/.env):
     AZURE_SEARCH_ENDPOINT

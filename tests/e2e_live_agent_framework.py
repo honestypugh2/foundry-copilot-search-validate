@@ -17,8 +17,8 @@ Verifies that the FoundryChatClient Agent appears in the Azure AI
 Foundry portal by checking agent registration.
 
 Usage:
-    cd foundry-copilot-hr-policy-knowledge
-    PYTHONPATH=$PWD/src python src/tests/e2e_live_agent_framework.py
+    cd foundry-copilot-search-validate
+    PYTHONPATH=$PWD/src python tests/e2e_live_agent_framework.py
 
 Environment variables required (from src/.env):
     AZURE_SEARCH_ENDPOINT

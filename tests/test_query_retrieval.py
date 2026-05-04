@@ -21,10 +21,10 @@ and reports:
 
 Usage:
     # Live mode (requires Azure credentials + indexed data)
-    PYTHONPATH=$PWD/src uv run python src/tests/test_query_retrieval.py
+    PYTHONPATH=$PWD/src uv run python tests/test_query_retrieval.py
 
     # Mock mode (validates wiring only, no Azure calls)
-    PYTHONPATH=$PWD/src uv run python src/tests/test_query_retrieval.py --mock
+    PYTHONPATH=$PWD/src uv run python tests/test_query_retrieval.py --mock
 """
 
 import argparse

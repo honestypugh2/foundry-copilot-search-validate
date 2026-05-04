@@ -64,6 +64,14 @@ else:
 # "multi_step"             — legacy 4-step pipeline (learning reference)
 PIPELINE_MODE = os.getenv("PIPELINE_MODE", "single_agent").lower()
 
+# Output mode: "answer_synthesis" or "extractive"
+# Extractive mode returns extracted passages from documents without synthesizing.
+# In extractive mode, answer_instructions are not used.
+OUTPUT_MODE = os.getenv(
+    "OUTPUT_MODE",
+    _AGENTIC_CONFIG.get("output_mode", "ANSWER_SYNTHESIS"),
+).upper()
+
 # Citation validation toggle (post-processing)
 VALIDATE_CITATIONS = os.getenv("VALIDATE_CITATIONS", "false").lower() == "true"
 
@@ -108,12 +116,14 @@ class FoundryAgentOrchestrator:
         self.mcp_endpoint = self._search_client.get_mcp_endpoint()
 
         self._pipeline_mode = PIPELINE_MODE
+        self._output_mode = OUTPUT_MODE
         self._validate_citations = VALIDATE_CITATIONS
 
         logger.info(
             "FoundryAgentOrchestrator initialised "
-            "(mode=%s, validate_citations=%s, MCP endpoint=%s)",
+            "(mode=%s, output_mode=%s, validate_citations=%s, MCP endpoint=%s)",
             self._pipeline_mode,
+            self._output_mode,
             self._validate_citations,
             self.mcp_endpoint,
         )
@@ -145,12 +155,32 @@ class FoundryAgentOrchestrator:
     # ------------------------------------------------------------------
 
     def _build_instructions(self) -> str:
-        """Build agent instructions following MS recommended template.
+        """Build agent instructions based on output mode.
+
+        ANSWER_SYNTHESIS mode (default):
+            Uses answer_instructions from config or default synthesis template.
+
+        EXTRACTIVE mode:
+            Uses minimal instructions — no answer synthesis required.
+            The agent retrieves and returns extracted passages with citations.
 
         Reference:
             https://github.com/Azure-Samples/azure-search-python-samples/blob/main/
             agentic-retrieval-pipeline-example/agent-example.ipynb
         """
+        if self._output_mode == "EXTRACTIVE":
+            return (
+                "You are a helpful HR policy assistant. Use the knowledge base "
+                "tool to retrieve relevant documents. Return the extracted "
+                "passages exactly as found in the source documents.\n"
+                "Always provide citation annotations using the MCP knowledge "
+                "base tool and render them as: "
+                "`【message_idx:search_idx†source_name】`\n"
+                "Do not synthesize or rephrase the content. Present the "
+                "extracted text directly with its source citation.\n"
+            )
+
+        # ANSWER_SYNTHESIS mode (default)
         custom = _AGENT_CONFIG.get("answer_instructions", "")
         if custom:
             return custom
@@ -230,13 +260,14 @@ class FoundryAgentOrchestrator:
                         "user_query": user_query,
                         "answer": answer,
                         "model": self.deployment_name,
-                        "output_mode": "mcp_single_agent",
+                        "output_mode": self._output_mode.lower(),
                         "pipeline_mode": "single_agent",
                         "is_grounded": True,
                         "steps": {
                             "mcp_retrieval_and_synthesis": {
                                 "status": "completed",
                                 "model": self.deployment_name,
+                                "output_mode": self._output_mode.lower(),
                             }
                         },
                     }

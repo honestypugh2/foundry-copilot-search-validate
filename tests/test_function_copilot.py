@@ -5,13 +5,13 @@ Dual-mode: mocked endpoint + live integration.
 
 Usage:
     # Live (default) – requires running func start
-    PYTHONPATH=$PWD/src pytest src/tests/test_function_copilot.py -v -s
+    PYTHONPATH=$PWD/src pytest tests/test_function_copilot.py -v -s
 
     # Mock – no Azure needed
-    PYTHONPATH=$PWD/src pytest src/tests/test_function_copilot.py -v -s --mock
+    PYTHONPATH=$PWD/src pytest tests/test_function_copilot.py -v -s --mock
 
     # Live endpoint only
-    PYTHONPATH=$PWD/src pytest src/tests/test_function_copilot.py -v -s -k live
+    PYTHONPATH=$PWD/src pytest tests/test_function_copilot.py -v -s -k live
 """
 
 import json

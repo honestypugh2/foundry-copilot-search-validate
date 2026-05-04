@@ -1,5 +1,5 @@
 """
-conftest.py – Shared fixtures and configuration for src/tests/
+conftest.py – Shared fixtures and configuration for tests/
 
 Dual-mode test infrastructure:
     DEFAULT → Live Azure (requires credentials + .env)
@@ -7,16 +7,16 @@ Dual-mode test infrastructure:
 
 Usage:
     # Live (default) – connects to Azure
-    PYTHONPATH=$PWD/src pytest src/tests/ -v
+    PYTHONPATH=$PWD/src pytest tests/ -v
 
     # Mock – no Azure needed
-    PYTHONPATH=$PWD/src pytest src/tests/ -v --mock
+    PYTHONPATH=$PWD/src pytest tests/ -v --mock
 
     # Run only mock-safe tests
-    PYTHONPATH=$PWD/src pytest src/tests/ -v -m mock
+    PYTHONPATH=$PWD/src pytest tests/ -v -m mock
 
     # Run only live tests
-    PYTHONPATH=$PWD/src pytest src/tests/ -v -m "not mock_only"
+    PYTHONPATH=$PWD/src pytest tests/ -v -m "not mock_only"
 """
 
 import logging

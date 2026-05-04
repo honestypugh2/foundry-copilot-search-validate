@@ -101,7 +101,7 @@
         "knowledge_source_name": "hr-knowledge-source",
         "knowledge_source_description": "Knowledge source for HR policy documents indexed in hr_lab_index",
         "knowledge_base_name": "hr-knowledge-base",
-        "output_mode": "ANSWER_SYNTHESIS",
+        "output_mode": "EXTRACTIVE",
         "retrieval_reasoning_effort": "medium",
         "search_fields": [
             "snippet",

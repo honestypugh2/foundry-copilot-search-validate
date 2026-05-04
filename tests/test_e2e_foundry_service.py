@@ -15,10 +15,10 @@ single-agent MCP default, optional multi-step pipeline).
 
 Usage:
     # Live mode (requires Azure credentials + indexed data)
-    PYTHONPATH=$PWD/src python src/tests/test_e2e_foundry_service.py
+    PYTHONPATH=$PWD/src python tests/test_e2e_foundry_service.py
 
     # Mock mode (validates wiring only)
-    PYTHONPATH=$PWD/src python src/tests/test_e2e_foundry_service.py --mock
+    PYTHONPATH=$PWD/src python tests/test_e2e_foundry_service.py --mock
 
 Environment variables required (live mode):
     AZURE_SEARCH_ENDPOINT, AZURE_OPENAI_ENDPOINT,

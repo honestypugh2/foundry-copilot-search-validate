@@ -5,10 +5,10 @@ Dual-mode: connects to Azure by default, mocked with --mock flag.
 
 Usage:
     # Live (default) – hits real Azure AI Search & Foundry
-    PYTHONPATH=$PWD/src pytest src/tests/test_agents_af.py -v -s
+    PYTHONPATH=$PWD/src pytest tests/test_agents_af.py -v -s
 
     # Mock – no Azure needed
-    PYTHONPATH=$PWD/src pytest src/tests/test_agents_af.py -v -s --mock
+    PYTHONPATH=$PWD/src pytest tests/test_agents_af.py -v -s --mock
 """
 
 import json

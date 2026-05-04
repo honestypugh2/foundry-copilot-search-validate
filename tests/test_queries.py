@@ -1,5 +1,5 @@
 """
-Canonical test queries shared across all src/tests/ scripts.
+Canonical test queries shared across all tests/ scripts.
 
 Sourced from test_query_retrieval.py — these are the exact queries
 used for end-to-end, integration, and unit tests.

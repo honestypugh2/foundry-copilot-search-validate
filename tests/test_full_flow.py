@@ -12,10 +12,10 @@ from Azure Blob Storage (not local data/ directory):
 
 Usage:
     # Run with live Azure services
-    python src/tests/test_full_flow.py
+    python tests/test_full_flow.py
 
     # Run in mock mode (no Azure credentials needed)
-    python src/tests/test_full_flow.py --mock
+    python tests/test_full_flow.py --mock
 
 Environment variables required (live mode):
     AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_API_KEY or USE_MANAGED_IDENTITY,
