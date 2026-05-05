@@ -39,7 +39,7 @@ venv.bak/
 .DS_Store
 
 # Excluded source directories
-src/agents_af/
+# src/agents_af/
 
 # Environment variables
 .env
@@ -146,7 +146,5 @@ scripts/test_*.py
 src/content_understanding/
 
 local.settings.json
-
-src/agents_af/*
 
 tests/*.json

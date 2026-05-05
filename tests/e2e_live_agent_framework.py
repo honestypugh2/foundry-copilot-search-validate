@@ -122,6 +122,18 @@ _fh.setFormatter(_plain_fmt)
 
 logging.basicConfig(level=logging.INFO, handlers=[_console, _fh])
 
+
+# Suppress "Event loop is closed" errors from httpx AsyncClient cleanup
+# (triggered when async transports are GC'd after the event loop closes)
+class _EventLoopClosedFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if "Event loop is closed" in record.getMessage():
+            return False
+        return True
+
+
+logging.getLogger("asyncio").addFilter(_EventLoopClosedFilter())
+
 logger = logging.getLogger("e2e_live_af")
 logger.info("Log file: %s", _log_file)
 
@@ -216,13 +228,13 @@ def step_2_verify_imports() -> None:
 
 def step_3_verify_agent_registration() -> None:
     logger.info("=" * 70)
-    logger.info("STEP 3: Verify FoundryChatClient Agent → Foundry Portal")
+    logger.info("STEP 3: Verify all pipeline agents → Foundry Portal")
     logger.info("=" * 70)
 
     from azure.identity import DefaultAzureCredential
     from azure.ai.projects import AIProjectClient
     from azure.ai.projects.models import PromptAgentDefinition
-    from agents_af.sequential_orchestrator import FOUNDRY_AGENT_NAME
+    from agents_af.sequential_orchestrator import FOUNDRY_AGENT_NAME, PIPELINE_AGENTS
 
     endpoint = (
         os.getenv("AZURE_AI_PROJECT_ENDPOINT")
@@ -233,40 +245,38 @@ def step_3_verify_agent_registration() -> None:
     )
     credential = DefaultAzureCredential()
 
-    logger.info("  ⮞ INPUT: agent_name=%s, endpoint=%s..., model=%s",
-                 FOUNDRY_AGENT_NAME, endpoint[:40], model)
+    logger.info("  ⮞ INPUT: %d pipeline agents, endpoint=%s..., model=%s",
+                 len(PIPELINE_AGENTS), endpoint[:40], model)
 
-    # Register in Foundry portal via AIProjectClient
+    # Register all pipeline agents in Foundry portal
     pc = AIProjectClient(endpoint=endpoint, credential=credential)
 
-    try:
-        existing = pc.agents.get(agent_name=FOUNDRY_AGENT_NAME)
-        logger.info("  ✓ Agent already in Foundry Portal: name=%s, version=%s",
-                     existing.name, existing.versions.get("latest", {}).get("version", "unknown") if existing.versions else "unknown")
-    except Exception:
-        logger.info("  Agent not found — registering in Foundry Portal...")
-        agent = pc.agents.create_version(
-            agent_name=FOUNDRY_AGENT_NAME,
-            definition=PromptAgentDefinition(
-                model=model,
-                instructions=(
-                    "You are an HR policy assistant. Answer questions based "
-                    "on the provided grounded sources. Cite the source file "
-                    "paths and policy numbers in your answer."
+    for agent_name, agent_config in PIPELINE_AGENTS.items():
+        try:
+            existing = pc.agents.get(agent_name=agent_name)
+            logger.info("  ✓ Agent '%s' already in Foundry Portal (version=%s)",
+                         existing.name,
+                         existing.versions.get("latest", {}).get("version", "unknown") if existing.versions else "unknown")
+        except Exception:
+            logger.info("  Agent '%s' not found — registering...", agent_name)
+            agent = pc.agents.create_version(
+                agent_name=agent_name,
+                definition=PromptAgentDefinition(
+                    model=model,
+                    instructions=agent_config["instructions"],
+                    temperature=0.0,
                 ),
-                temperature=0.0,
-            ),
-        )
-        logger.info("  ✓ Agent registered: name=%s, version=%s",
-                     agent.name, agent.version)
+            )
+            logger.info("  ✓ Agent '%s' registered (version=%s)",
+                         agent.name, agent.version)
 
-    # Verify agent is visible in Foundry Portal
-    found = pc.agents.get(agent_name=FOUNDRY_AGENT_NAME)
-    assert found is not None, f"Agent '{FOUNDRY_AGENT_NAME}' not visible in Foundry Portal"
-    logger.info("  ✓ Agent VISIBLE in Foundry Portal: name=%s, version=%s",
-                 found.name, found.versions.get("latest", {}).get("version", "unknown") if found.versions else "unknown")
+    # Verify all agents are visible in Foundry Portal
+    for agent_name in PIPELINE_AGENTS:
+        found = pc.agents.get(agent_name=agent_name)
+        assert found is not None, f"Agent '{agent_name}' not visible in Foundry Portal"
+    logger.info("  ✓ All %d pipeline agents VISIBLE in Foundry Portal", len(PIPELINE_AGENTS))
 
-    # Also verify FoundryChatClient wraps it properly
+    # Also verify FoundryChatClient wraps the synthesis agent properly
     from agent_framework.foundry import FoundryChatClient
 
     logger.info("  Creating FoundryChatClient wrapper...")
@@ -281,8 +291,8 @@ def step_3_verify_agent_registration() -> None:
     )
     assert af_agent is not None
 
-    logger.info("  ⮜ OUTPUT: agent=%s visible in portal, AF wrapper created",
-                 FOUNDRY_AGENT_NAME)
+    logger.info("  ⮜ OUTPUT: %d agents in portal, AF wrapper created",
+                 len(PIPELINE_AGENTS))
     logger.info("✓ Step 3 PASSED\n")
 
 
@@ -308,8 +318,14 @@ def step_4_test_individual_agents() -> dict[str, Any]:
     logger.info("")
 
     # --- Retrieval Agent ---
-    logger.info("  ─── 4a. RetrievalAgent ───")
+    logger.info("  ─── 4a. RetrievalAgent (Agentic Retrieval) ───")
     logger.info("    ⮞ INPUT: query=%r", query)
+    logger.info("    ⮞ AGENTIC RETRIEVAL COMPONENTS:")
+    logger.info("      1. Query             → user query sent to Knowledge Base")
+    logger.info("      2. Query Planning    → KB decomposes into sub-queries")
+    logger.info("      3. Query Execution   → sub-queries run against index")
+    logger.info("      4. Merged Results    → reranked matches from all sub-queries")
+    logger.info("      5. Final Result      → synthesized answer + references")
     t0 = time.time()
     retrieval = RetrievalAgent()
     retrieval_output = retrieval.run(query)
@@ -317,13 +333,82 @@ def step_4_test_individual_agents() -> dict[str, Any]:
 
     assert "matches" in retrieval_output
     assert len(retrieval_output["matches"]) > 0
-    logger.info("    ⮜ OUTPUT: %d matches, agentic=%s, %.2fs",
-                 len(retrieval_output["matches"]), retrieval._agentic_enabled, dt)
-    if "agentic_answer" in retrieval_output:
-        logger.info("      agentic_answer: %s...", retrieval_output["agentic_answer"][:80])
-    for i, m in enumerate(retrieval_output["matches"][:3]):
-        logger.info("      match[%d] policy=%s  file=%s",
-                     i, m.get("policyNumber", "?"), m.get("fileName", "?")[:60])
+
+    # --- Log Agentic Retrieval Components ---
+    logger.info("")
+    logger.info("    ⮜ AGENTIC RETRIEVAL OUTPUT (%.2fs):", dt)
+    logger.info("      agentic_enabled: %s", retrieval._agentic_enabled)
+    logger.info("")
+
+    # Component 1: Query
+    logger.info("      ┌─ [1] QUERY ─────────────────────────────────────────")
+    logger.info("      │  user_query: %r", query)
+    logger.info("      └────────────────────────────────────────────────────")
+
+    # Component 2 & 3: Query Planning + Execution (from activity trace)
+    activity = retrieval_output.get("activity", [])
+    if activity:
+        logger.info("      ┌─ [2] QUERY PLANNING (%d activity steps) ──────────", len(activity))
+        for idx, step in enumerate(activity):
+            step_type = step.get("type", "unknown") if isinstance(step, dict) else str(step)
+            logger.info("      │  step[%d] type=%s", idx, step_type)
+
+            # Log sub-queries from query planning
+            if isinstance(step, dict):
+                if "subqueries" in step:
+                    logger.info("      │    sub-queries:")
+                    for sq_idx, sq in enumerate(step["subqueries"]):
+                        sq_text = sq.get("query", sq) if isinstance(sq, dict) else str(sq)
+                        logger.info("      │      [%d] %s", sq_idx, sq_text)
+                # searchIndex steps have search_index_arguments.search
+                sia = step.get("search_index_arguments", {})
+                if sia and sia.get("search"):
+                    logger.info("      │    search: %s", sia["search"][:100])
+                if "count" in step:
+                    logger.info("      │    count: %s", step["count"])
+                if "elapsed_ms" in step:
+                    logger.info("      │    elapsed_ms: %s", step["elapsed_ms"])
+                if "input_tokens" in step:
+                    logger.info("      │    tokens: in=%s out=%s",
+                                 step.get("input_tokens", "?"), step.get("output_tokens", "?"))
+        logger.info("      └────────────────────────────────────────────────────")
+
+        # Identify sub-query execution steps
+        search_steps = [s for s in activity if isinstance(s, dict) and s.get("type") in ("searchIndex", "search", "vectorSearch")]
+        if search_steps:
+            logger.info("      ┌─ [3] QUERY EXECUTION (%d search operations) ─────", len(search_steps))
+            for idx, ss in enumerate(search_steps):
+                sia = ss.get("search_index_arguments", {})
+                search_text = sia.get("search", "?") if sia else "?"
+                logger.info("      │  search[%d]: type=%s  query=%s",
+                             idx, ss.get("type", "?"),
+                             str(search_text)[:80])
+                if "count" in ss:
+                    logger.info("      │    → %d results", ss["count"])
+            logger.info("      └────────────────────────────────────────────────────")
+    else:
+        logger.info("      ┌─ [2] QUERY PLANNING ──────────────────────────────")
+        logger.info("      │  (no activity trace — agentic retrieval may be disabled)")
+        logger.info("      └────────────────────────────────────────────────────")
+
+    # Component 4: Merged Results
+    logger.info("      ┌─ [4] MERGED RESULTS (%d matches) ────────────────", len(retrieval_output["matches"]))
+    for i, m in enumerate(retrieval_output["matches"]):
+        score = m.get("reranker_score", "n/a")
+        logger.info("      │  match[%d] policy=%-6s score=%-5s file=%s",
+                     i, m.get("policyNumber", "?"), score,
+                     m.get("fileName", "?")[:55])
+    logger.info("      └────────────────────────────────────────────────────")
+
+    # Component 5: Final Result (synthesized answer)
+    logger.info("      ┌─ [5] FINAL RESULT ─────────────────────────────────")
+    if "agentic_answer" in retrieval_output and retrieval_output["agentic_answer"]:
+        logger.info("      │  agentic_answer: %s", retrieval_output["agentic_answer"][:200])
+    else:
+        logger.info("      │  agentic_answer: (none — extractive mode or fallback)")
+    logger.info("      │  total_matches: %d", len(retrieval_output["matches"]))
+    logger.info("      │  activity_steps: %d", len(activity))
+    logger.info("      └────────────────────────────────────────────────────")
 
     # --- Source Validator ---
     logger.info("  ─── 4b. SourceValidatorAgent ───")
@@ -433,19 +518,66 @@ def step_5_full_orchestrator() -> list[dict]:
             assert len(result["references"]) > 0, "No references"
             assert result["answer"], "Empty answer"
 
-            logger.info("    ⮜ OUTPUT:")
+            logger.info("    ⮜ OUTPUT (%.2fs):", dt)
             logger.info("      status     : %s", result["status"])
-            logger.info("      matches    : %d", len(result["matches"]))
-            logger.info("      references : %d", len(result["references"]))
             logger.info("      grounded   : %s", result["is_grounded"])
-            logger.info("      answer     : %s...", result["answer"][:120])
-            logger.info("      elapsed    : %.2fs", dt)
+            logger.info("")
 
-            # Log matched documents
+            # --- Agentic Retrieval Components for this query ---
+            logger.info("      ┌─ AGENTIC RETRIEVAL TRACE ───────────────────────")
+
+            # [1] Query
+            logger.info("      │ [1] Query: %s", query)
+
+            # [2] Query Planning (from steps metadata if available)
+            steps_data = result.get("steps", {})
+            retrieval_step = steps_data.get("retrieval", {})
+            logger.info("      │ [2] Query Planning: match_count=%s",
+                         retrieval_step.get("match_count", "?"))
+
+            # [3] Query Execution — sub-queries (from activity if passed through)
+            # Note: Activity trace is available in Step 4 (direct RetrievalAgent call).
+            # The AF orchestrator does not expose activity in its final output dict;
+            # sub-query details are logged internally by the RetrievalExecutor.
+            activity = result.get("activity", [])
+            if activity:
+                search_ops = [a for a in activity if isinstance(a, dict) and a.get("type") in ("searchIndex", "search", "vectorSearch")]
+                planning_ops = [a for a in activity if isinstance(a, dict) and a.get("type") in ("modelQueryPlanning", "queryPlanning")]
+                if planning_ops:
+                    for p in planning_ops:
+                        sqs = p.get("subqueries", [])
+                        if sqs:
+                            logger.info("      │ [3] Sub-queries (%d):", len(sqs))
+                            for sq_i, sq in enumerate(sqs):
+                                sq_text = sq.get("query", sq) if isinstance(sq, dict) else str(sq)
+                                logger.info("      │       [%d] %s", sq_i, sq_text[:80])
+                if search_ops:
+                    logger.info("      │     Search executions: %d", len(search_ops))
+                    for s_i, s_op in enumerate(search_ops):
+                        sia = s_op.get("search_index_arguments", {})
+                        search_text = sia.get("search", "?") if sia else "?"
+                        logger.info("      │       exec[%d] type=%s  query=%s  count=%s",
+                                     s_i, s_op.get("type", "?"),
+                                     str(search_text)[:60],
+                                     s_op.get("count", "?"))
+            else:
+                logger.info("      │ [3] Sub-queries: (activity not in pipeline output)")
+
+            # [4] Merged Results
+            logger.info("      │ [4] Merged Results: %d matches, %d validated, %d refs",
+                         len(result.get("matches", [])),
+                         len(result.get("validated_sources", [])),
+                         len(result.get("references", [])))
             for j, m in enumerate(result["matches"][:3]):
-                logger.info("      match[%d] policy=%s  file=%s",
+                logger.info("      │       match[%d] policy=%-6s score=%-5s file=%s",
                              j, m.get("policyNumber", "?"),
-                             m.get("fileName", "?")[:60])
+                             m.get("reranker_score", "n/a"),
+                             m.get("fileName", "?")[:50])
+
+            # [5] Final Result
+            logger.info("      │ [5] Final Result:")
+            logger.info("      │       answer: %s...", result["answer"][:120])
+            logger.info("      └─────────────────────────────────────────────────")
 
             # Check expected policy
             if qe.expected_policy:
