@@ -95,21 +95,21 @@ formatting in one pass. The platform handles the MCP call transparently.
 ### Pattern B: Hybrid MCP + Metadata Lookup (`ORCHESTRATOR_PATTERN=B`)
 
 ```
-User Query → Foundry Agent (MCPTool + FunctionTool, tool_choice="required")
-    ├─ knowledge_base_retrieve  → content/policy questions (MCP, intercepted client-side)
-    └─ file_metadata_lookup     → file-location questions (direct index search)
+User Query → Client-Side Query Classification
+    ├─ Content question → Foundry Agent (MCPTool only) → Answer with Citations
+    └─ File-location question → file_metadata_lookup (direct index search) → Agent formats
 ```
 
-Pattern B adds a **custom function tool** (`file_metadata_lookup`) alongside the MCP tool.
-The agent routes queries to the appropriate tool:
+Pattern B uses **client-side query classification** to route queries to the optimal path:
 
-- **Content questions** → `knowledge_base_retrieve` (MCP tool, intercepted and executed
-  via `agentic_retrieve()` client-side — gives access to subquery activity data)
-- **File-location questions** → `file_metadata_lookup` (direct `hybrid_search` returning
-  only metadata fields: `metadata_storage_path`, `metadata_storage_name`, `blob_url`)
+- **Content questions** → Foundry Agent with MCPTool only (platform handles MCP natively,
+  same as Pattern A — full KB retrieval with citations)
+- **File-location questions** → `file_metadata_lookup` called directly (bypasses MCP entirely),
+  results formatted by the agent. Returns deterministic metadata: `metadata_storage_path`,
+  `metadata_storage_name`, `blob_url`.
 
 This provides **deterministic file paths** — no LLM hallucination risk for metadata —
-while preserving full KB retrieval for content questions.
+while preserving full KB retrieval with native MCP citations for content questions.
 
 ### Optional: Multi-Step Pipeline (`PIPELINE_MODE=multi_step`)
 

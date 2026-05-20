@@ -61,34 +61,35 @@ the **infrastructure level**, making a separate validation step redundant.
 ### Pattern B: Hybrid MCP + Metadata Lookup (`ORCHESTRATOR_PATTERN=B`)
 
 ```
-User Query → Foundry Agent (MCPTool + FunctionTool, tool_choice="required")
-    ├─ knowledge_base_retrieve  → content/policy questions (MCP)
-    └─ file_metadata_lookup     → file-location questions (direct search)
+User Query → Client-Side Query Classification
+    ├─ Content question → Foundry Agent (MCPTool only) → Answer with Citations
+    └─ File-location question → file_metadata_lookup (direct search) → Agent formats
 ```
 
-Pattern B adds a **custom function tool** (`file_metadata_lookup`) alongside the MCP
-tool on a single Foundry Agent. The agent routes queries to the appropriate tool based
-on instructions:
+Pattern B uses **client-side query classification** to route queries to the optimal path.
+A regex-based classifier detects file-location intent ("where is", "file path", "blob URL",
+"stored", "located", etc.) and routes accordingly:
 
-- **Content questions** ("What does Policy 51350 say?") → `knowledge_base_retrieve`
+- **Content questions** ("What does Policy 51350 say?") → Foundry Agent with MCPTool only
+  (platform handles MCP natively, same as Pattern A — full citations)
 - **File-location questions** ("Where is the PTO policy stored?") → `file_metadata_lookup`
+  called directly (bypasses MCP entirely), then the agent formats the deterministic results
 
-**Key implementation detail:** The Foundry Agent API does not transparently handle MCP
-tool calls when mixed with a FunctionTool on the same agent. When the agent calls
-`knowledge_base_retrieve`, the client **intercepts** the call, executes
-`agentic_retrieve()` directly, and submits the result back as `function_call_output`.
-This preserves the MCP architecture while providing direct access to activity data
-(subqueries, elapsed times).
+**Key implementation detail:** The Foundry platform ignores `tool_choice` overrides when
+MCPTool is registered — it always routes to `knowledge_base_retrieve` regardless of
+instructions. Pattern B solves this with client-side classification: file-location queries
+bypass the agent's tool routing entirely, calling `hybrid_search()` directly for
+deterministic metadata, then passing results to the agent (with no tools) for formatting.
 
 **Why Pattern B for file-location queries:**
 
-| Concern | Pattern A (MCP only) | Pattern B (MCP + metadata tool) |
+| Concern | Pattern A (MCP only) | Pattern B (classified routing) |
 |---------|---------------------|-------------------------------|
-| Content answers | ✓ Full KB retrieval | ✓ Full KB retrieval (intercepted) |
+| Content answers | ✓ Full KB retrieval | ✓ Full KB retrieval (native MCP) |
 | File paths/URLs | LLM-synthesized (may hallucinate) | Deterministic from index |
-| Activity data | Not captured | Direct access via interception |
-| Latency (content) | ~10–15s | ~20–35s (agentic_retrieve + response) |
-| Latency (metadata) | ~10–15s | ~5–10s (hybrid_search only) |
+| Content citations | Native MCP annotations | Native MCP annotations |
+| Latency (content) | ~10–15s | ~10–15s (same — MCPTool only) |
+| Latency (metadata) | ~10–15s | ~5–10s (hybrid_search + format) |
 
 ### OPTIONAL: Multi-Step Pipeline (`PIPELINE_MODE=multi_step`)
 
@@ -238,20 +239,115 @@ The MCP endpoint is authenticated via a Foundry project connection:
 
 ## Pipeline Comparison
 
-### Single-Agent (Default)
+### Data Pipeline (Indexing)
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant Script as upload_to_blob.py
+    participant Blob as Blob Storage (ask-hr-knowledge)
+    participant IdxScript as index_knowledge_base.py
+    participant Search as Azure AI Search
+    participant AOAI as Azure OpenAI (embedding)
+
+    Dev->>Script: Run upload script
+    Script->>Blob: Upload .docx files
+    Blob-->>Script: 15 documents uploaded
+
+    Dev->>IdxScript: Run indexing script
+    IdxScript->>Search: Create index (hr_lab_index)
+    Search-->>IdxScript: Index created (12 fields)
+
+    IdxScript->>Search: Create data source
+    IdxScript->>Search: Create skillset (hr-lab-skillset)
+    Note over Search,AOAI: ContentUnderstanding + Embedding
+
+    IdxScript->>Search: Create indexer (hr-lab-indexer)
+    Search->>Blob: Read documents
+    Blob-->>Search: Document content
+    Search->>AOAI: Generate embeddings (1536 dims)
+    AOAI-->>Search: Vectors
+    Search-->>IdxScript: Indexer running
+
+    IdxScript->>Search: Create knowledge source
+    IdxScript->>Search: Create knowledge base
+    Search-->>IdxScript: MCP endpoint available
+```
+
+### Search Pipeline (Agentic Retrieval)
+
+```mermaid
+sequenceDiagram
+    participant Agent as Foundry Agent
+    participant MCP as MCP Endpoint
+    participant Planner as Query Planner (LLM)
+    participant Index as Search Index (hr_lab_index)
+    participant Ranker as Semantic Ranker
+
+    Agent->>MCP: knowledge_base_retrieve(query)
+    MCP->>Planner: Plan query decomposition
+    Note over Planner: retrieval_reasoning_effort = medium
+
+    Planner-->>MCP: Subqueries (3-10)
+
+    loop For each subquery
+        MCP->>Index: Hybrid search (text + vector)
+        Index-->>MCP: Matching chunks + scores
+    end
+
+    MCP->>Ranker: Rerank merged results
+    Ranker-->>MCP: Reranked results (top-k)
+
+    MCP-->>Agent: Extractive data + activity log
+    Note over Agent: Activity: subquery details, elapsed times, counts
+```
+
+### Pattern A: Single-Agent MCP (Default)
 
 ```mermaid
 sequenceDiagram
     participant User
     participant Orchestrator
-    participant FoundryAgent as Foundry Agent<br/>(MCPTool)
-    participant KB as Knowledge Base<br/>(MCP Endpoint)
+    participant FoundryAgent as Foundry Agent (MCPTool)
+    participant KB as Knowledge Base (MCP)
 
     User->>Orchestrator: HR policy question
     Orchestrator->>FoundryAgent: create agent + send query
     FoundryAgent->>KB: knowledge_base_retrieve (auto)
     KB-->>FoundryAgent: extractive data + citations
-    FoundryAgent-->>Orchestrator: answer with 【citations】
+    FoundryAgent-->>Orchestrator: answer with citations
+    Orchestrator-->>User: answer
+```
+
+### Pattern B: Classified Routing (File-Location + Content)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Orchestrator as PatternB Orchestrator
+    participant Classifier as Query Classifier (regex)
+    participant Search as Azure AI Search
+    participant FormatterAgent as Formatter Agent (no tools)
+    participant ContentAgent as Content Agent (MCPTool)
+    participant KB as Knowledge Base (MCP)
+
+    User->>Orchestrator: HR policy question
+    Orchestrator->>Classifier: Classify query intent
+
+    alt File-location query
+        Classifier-->>Orchestrator: file_metadata_lookup
+        Orchestrator->>Search: hybrid_search(query, top=3)
+        Search-->>Orchestrator: metadata (paths, URLs, filenames)
+        Orchestrator->>FormatterAgent: Format results (no tools)
+        FormatterAgent-->>Orchestrator: Formatted answer with exact paths
+    else Content query
+        Classifier-->>Orchestrator: content (MCP)
+        Orchestrator->>ContentAgent: create agent + send query
+        ContentAgent->>KB: knowledge_base_retrieve
+        KB-->>ContentAgent: extractive data + citations
+        ContentAgent-->>Orchestrator: answer with citations
+    end
+
     Orchestrator-->>User: answer
 ```
 
@@ -264,8 +360,8 @@ sequenceDiagram
     participant Search as Azure AI Search
     participant SrcVal as Source Validator
     participant RefVal as Reference Validator
-    participant FoundryAgent as Foundry Agent<br/>(MCPTool)
-    participant KB as Knowledge Base<br/>(MCP Endpoint)
+    participant FoundryAgent as Foundry Agent (MCPTool)
+    participant KB as Knowledge Base (MCP)
 
     User->>Orchestrator: HR policy question
     Orchestrator->>Search: hybrid search (1st retrieval)
@@ -280,7 +376,7 @@ sequenceDiagram
     FoundryAgent-->>Orchestrator: answer
     Orchestrator-->>User: answer
 
-    Note over Search,KB: ⚠️ Double retrieval
+    Note over Search,KB: WARNING - Double retrieval
 ```
 
 ---

@@ -236,9 +236,10 @@ PYTHONPATH=$PWD/src python tests/test_mcp_query_retrieval.py --pattern A --limit
 - Results written to `tests/mcp_query_retrieval_results.json` (Step 5)
 
 **Pattern B specific behavior:**
-- Agent calls `knowledge_base_retrieve` (MCP) for content questions → client intercepts, executes `agentic_retrieve()` directly, submits result back
-- Agent calls `file_metadata_lookup` for file-location questions → client executes `hybrid_search()`, submits deterministic metadata back
-- Activity data (subqueries, elapsed times) captured from the intercepted KB call
+- Client-side query classification detects file-location intent (regex-based)
+- File-location queries → `file_metadata_lookup` called directly (bypasses MCP), agent formats results
+- Content queries → Foundry Agent with MCPTool only (platform handles MCP natively, same as Pattern A)
+- Activity data (subqueries, elapsed times) captured from the MCP content pipeline
 
 ---
 

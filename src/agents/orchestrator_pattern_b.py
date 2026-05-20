@@ -2,24 +2,34 @@
 Foundry Agent Orchestrator — Pattern B: Custom Metadata-Lookup Tool
 (Recommended for Production)
 
-A dedicated Foundry Agent tool handles file-location queries by performing
-a targeted Azure AI Search query that returns only metadata fields, bypassing
-the knowledge base entirely for those queries.
+Uses client-side query classification to route queries to the optimal path:
+  - File-location queries → file_metadata_lookup (direct index search, no MCP)
+  - Content queries → Foundry Agent with MCPTool only (platform handles natively)
 
 Architecture:
     User: "Where is Policy 51350?"
         ↓
-    Foundry Agent (tool_choice routing)
-        ├─ knowledge_base_retrieve  → content/policy questions (MCP)
-        └─ file_metadata_lookup     → file-location questions (custom tool)
-            ↓
-        Azure AI Search direct query
-            (select: metadata_storage_path, metadata_storage_name, blob_url)
-            ↓
-        Deterministic JSON response → Agent formats for user
+    Client-Side Classification (regex)
+        ├─ file-location → file_metadata_lookup() direct call
+        │       ↓
+        │   Azure AI Search direct query
+        │       (select: metadata_storage_path, metadata_storage_name, blob_url)
+        │       ↓
+        │   Agent formats deterministic results (no tools)
+        │
+        └─ content → Foundry Agent (MCPTool only)
+                ↓
+            knowledge_base_retrieve (platform-handled)
+                ↓
+            Answer with MCP citations
 
 This pattern provides DETERMINISTIC file paths — no LLM hallucination
-risk for metadata fields — while keeping full KB retrieval for content.
+risk for metadata fields — while keeping full KB retrieval with native
+MCP citations for content queries.
+
+Note: The Foundry platform ignores tool_choice overrides when MCPTool is
+registered, always routing to knowledge_base_retrieve. This architecture
+bypasses that limitation via client-side classification.
 
 Environment:
     ORCHESTRATOR_PATTERN=B   (selects this orchestrator)
@@ -79,17 +89,16 @@ VALIDATE_CITATIONS = os.getenv("VALIDATE_CITATIONS", "false").lower() == "true"
 # --------------------------------------------------------------------------
 # Tool definitions
 #
-# Pattern B architecture:
-#   knowledge_base_retrieve  → MCP tool (content/policy questions)
-#   file_metadata_lookup     → Function tool (file-location questions)
+# Pattern B architecture (client-side classification):
+#   File-location queries → file_metadata_lookup (direct, no agent tool routing)
+#   Content queries → MCPTool only (platform handles MCP natively)
 #
-# The Foundry Agent API does not transparently handle MCP tool calls when
-# mixed with FunctionTool in the same agent. When the agent calls the MCP
-# tool, we intercept it and execute agentic_retrieve() directly, then
-# submit the result back as function_call_output. This gives us:
-#   - The exact architecture the user described (MCP + custom tool)
-#   - Direct access to KB activity data (subqueries, elapsed times)
-#   - Deterministic file paths from the custom tool
+# The Foundry platform ignores tool_choice overrides when MCPTool is
+# registered — it always routes to knowledge_base_retrieve. Pattern B
+# solves this by classifying queries client-side and routing to separate
+# pipelines:
+#   - File-location → hybrid_search() directly, agent formats results
+#   - Content → MCPTool only (same as Pattern A, full citations)
 # --------------------------------------------------------------------------
 _FILE_METADATA_TOOL_DEFINITION = {
     "type": "function",
@@ -123,22 +132,19 @@ _FILE_METADATA_TOOL_DEFINITION = {
 
 class PatternBOrchestrator:
     """
-    Pattern B: Custom Metadata-Lookup Tool (Recommended for Production).
+    Pattern B: Client-Classified Routing (Recommended for Production).
 
     Architecture:
-        User query → Foundry Agent (tool_choice routing)
-            ├─ knowledge_base_retrieve  → content/policy questions (MCP)
-            └─ file_metadata_lookup     → file-location questions (custom tool)
-                ↓
-            Azure AI Search direct query
-                (select: metadata_storage_path, metadata_storage_name, blob_url)
-                ↓
-            Deterministic JSON response → Agent formats for user
+        User query → Client-Side Classification (regex)
+            ├─ File-location query → file_metadata_lookup() directly
+            │       → hybrid_search() → deterministic metadata
+            │       → Agent formats results (no tools)
+            └─ Content query → Foundry Agent (MCPTool only)
+                    → knowledge_base_retrieve (platform-handled)
+                    → Answer with MCP citations
 
-    The MCP tool is registered on the agent but the platform does not
-    auto-handle it when mixed with a FunctionTool. We intercept MCP calls,
-    execute agentic_retrieve() directly, and submit the result back. This
-    preserves the architecture while giving us access to activity data.
+    The Foundry platform ignores tool_choice when MCPTool is registered,
+    so we classify queries client-side and route to dedicated pipelines.
     """
 
     def __init__(self):
@@ -163,6 +169,16 @@ class PatternBOrchestrator:
         self._output_mode = OUTPUT_MODE
         self._validate_citations = VALIDATE_CITATIONS
         self._last_activity: list = []
+
+        # Patterns for client-side query classification (file-location routing)
+        self._file_location_patterns = re.compile(
+            r"(?i)\b("
+            r"where\s+is|where\s+are|file\s*path|storage\s*path|"
+            r"blob\s*(url|path|location)|give\s+me\s+the\s+link|"
+            r"document\s+location|located\b|stored\b|"
+            r"metadata.storage.path|download\s+link"
+            r")"
+        )
 
         logger.info(
             "PatternBOrchestrator initialised "
@@ -195,6 +211,21 @@ class PatternBOrchestrator:
             parameters=func_def["parameters"],
             strict=False,
         )
+
+    # ------------------------------------------------------------------
+    # Query classification (client-side routing)
+    # ------------------------------------------------------------------
+
+    def _classify_query(self, query: str) -> str:
+        """Classify query to determine which tool should be forced.
+
+        Returns:
+            "file_metadata_lookup" — for file-location queries
+            "required" — let agent choose (content or ambiguous queries)
+        """
+        if self._file_location_patterns.search(query):
+            return "file_metadata_lookup"
+        return "required"
 
     # ------------------------------------------------------------------
     # Tool implementations
@@ -316,9 +347,149 @@ class PatternBOrchestrator:
     # ==================================================================
 
     async def _execute_pipeline(self, user_query: str) -> Dict[str, Any]:
-        """Execute the Pattern B dual-tool pipeline.
+        """Execute the Pattern B classified pipeline.
 
-        User query → Agent (MCP + Function tool) → Answer
+        Client-side routing:
+          - File-location queries → file_metadata_lookup only (no MCP)
+          - Content queries → Foundry Agent with MCPTool only
+        """
+        classified = self._classify_query(user_query)
+        if classified == "file_metadata_lookup":
+            return await self._execute_file_location_pipeline(user_query)
+        else:
+            return await self._execute_content_pipeline(user_query)
+
+    async def _execute_file_location_pipeline(self, user_query: str) -> Dict[str, Any]:
+        """Execute the file-location pipeline (deterministic metadata lookup).
+
+        Calls file_metadata_lookup directly, then asks the agent (with no
+        tools) to format the result for the user. This bypasses MCP entirely,
+        giving fast, deterministic file paths.
+        """
+        # Execute direct metadata lookup
+        lookup_result = self.file_metadata_lookup(user_query)
+        tool_calls_made = [{
+            "tool": "file_metadata_lookup",
+            "arguments": {"query": user_query},
+            "result": lookup_result,
+        }]
+        logger.info(
+            "Pattern B: file_metadata_lookup executed directly "
+            "(query=%r, found=%s, count=%d)",
+            user_query,
+            lookup_result["found"],
+            lookup_result.get("document_count", 0),
+        )
+
+        credential = DefaultAzureCredential(exclude_environment_credential=True)
+
+        async with (
+            credential,
+            AIProjectClient(
+                endpoint=self.project_endpoint, credential=credential
+            ) as project_client,
+            project_client.get_openai_client() as openai_client,
+        ):
+            # Create agent WITHOUT tools — just for formatting the result
+            formatting_instructions = (
+                "You are a helpful HR policy assistant. The user asked for "
+                "a file location. A search was performed and the results are "
+                "provided below. Present the EXACT file paths, URLs, and "
+                "metadata returned. Never modify, invent, or hallucinate paths. "
+                "If no documents were found, say so.\n\n"
+                "RESPONSE FORMAT:\n"
+                "- Show the file name, storage path, and blob URL for each result\n"
+                "- Use markdown formatting for clarity\n"
+                "- Present exact values — do not paraphrase paths\n"
+            )
+            agent = await project_client.agents.create_version(
+                agent_name="HRPolicyAgentB",
+                definition=PromptAgentDefinition(
+                    model=self.deployment_name,
+                    instructions=formatting_instructions,
+                ),
+            )
+            logger.info(
+                "Pattern B (file-location): agent created (name=%s, version=%s)",
+                agent.name,
+                agent.version,
+            )
+
+            try:
+                conversation = await openai_client.conversations.create()
+                try:
+                    # Send the user query + lookup result as context
+                    prompt = (
+                        f"User question: {user_query}\n\n"
+                        f"Search results (file_metadata_lookup):\n"
+                        f"{json.dumps(lookup_result, indent=2)}"
+                    )
+
+                    answer_text = ""
+                    token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+                    stream = await openai_client.responses.create(
+                        conversation=conversation.id,
+                        input=prompt,
+                        extra_body={
+                            "agent_reference": {
+                                "name": agent.name,
+                                "type": "agent_reference",
+                            }
+                        },
+                        stream=True,
+                    )
+
+                    async for event in stream:
+                        if event.type == "response.output_text.delta":
+                            answer_text += event.delta
+                        elif event.type == "response.completed":
+                            if hasattr(event, "response") and hasattr(event.response, "usage"):
+                                usage = event.response.usage
+                                if usage:
+                                    token_usage["prompt_tokens"] += getattr(usage, "input_tokens", 0)
+                                    token_usage["completion_tokens"] += getattr(usage, "output_tokens", 0)
+                                    token_usage["total_tokens"] += getattr(usage, "total_tokens", 0)
+
+                    answer = answer_text or "The agent did not produce a response."
+
+                    result: Dict[str, Any] = {
+                        "status": "completed",
+                        "user_query": user_query,
+                        "answer": answer,
+                        "model": self.deployment_name,
+                        "output_mode": self._output_mode.lower(),
+                        "pipeline_mode": "pattern_b",
+                        "pattern": "B",
+                        "is_grounded": True,
+                        "tool_calls": tool_calls_made,
+                        "token_usage": token_usage,
+                        "activity": [],
+                    }
+
+                    if self._validate_citations:
+                        validation = self._validate_citation_annotations(answer)
+                        result["citation_validation"] = validation
+
+                    return result
+
+                finally:
+                    await openai_client.conversations.delete(
+                        conversation_id=conversation.id
+                    )
+            finally:
+                persist = (
+                    os.getenv("PERSIST_FOUNDRY_AGENTS", "true").lower() == "true"
+                )
+                if not persist:
+                    await project_client.agents.delete_version(
+                        agent_name=agent.name, agent_version=agent.version
+                    )
+
+    async def _execute_content_pipeline(self, user_query: str) -> Dict[str, Any]:
+        """Execute the content pipeline (MCP knowledge_base_retrieve).
+
+        Uses the full agent with MCPTool for content/policy questions.
         """
         credential = DefaultAzureCredential(exclude_environment_credential=True)
 
@@ -329,16 +500,15 @@ class PatternBOrchestrator:
             ) as project_client,
             project_client.get_openai_client() as openai_client,
         ):
-            # Create agent with BOTH tools
+            # Create agent with MCP tool only (content queries)
             mcp_tool = self._build_mcp_tool()
-            func_tool = self._build_function_tool()
 
             agent = await project_client.agents.create_version(
                 agent_name="HRPolicyAgentB",
                 definition=PromptAgentDefinition(
                     model=self.deployment_name,
                     instructions=self._build_instructions(),
-                    tools=[mcp_tool, func_tool],
+                    tools=[mcp_tool],
                 ),
             )
             logger.info(
@@ -569,7 +739,7 @@ class PatternBOrchestrator:
     # ==================================================================
 
     async def process_query_async(self, user_query: str) -> Dict[str, Any]:
-        """Process a user query using the Pattern B dual-tool pipeline."""
+        """Process a user query using the Pattern B classified pipeline."""
         logger.info("Processing query (pattern=B): %r", user_query)
         try:
             return await self._execute_pipeline(user_query)
