@@ -229,9 +229,9 @@ def run_tests(mock: bool) -> list[QueryTestCase]:
         from agents.source_validator_agent import SourceValidatorAgent
         from agents.reference_validator_agent import ReferenceValidatorAgent
 
-        retrieval = RetrievalAgent()
-        source_validator = SourceValidatorAgent()
-        ref_validator = ReferenceValidatorAgent()
+        retrieval: Any = RetrievalAgent()
+        source_validator: Any = SourceValidatorAgent()
+        ref_validator: Any = ReferenceValidatorAgent()
     else:
         retrieval = source_validator = ref_validator = None
 

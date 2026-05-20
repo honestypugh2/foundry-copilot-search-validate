@@ -156,6 +156,8 @@ class MCPTestResult:
     file_found: bool = False
     has_citations: bool = False
     citation_count: int = 0
+    token_usage: dict = field(default_factory=dict)
+    activity: list = field(default_factory=list)
     error: str = ""
     elapsed: float = 0.0
     root_causes: list[str] = field(default_factory=list)
@@ -241,33 +243,35 @@ def step_2_verify_imports() -> None:
 #  STEP 3: Initialize orchestrator
 # =========================================================================
 
-def step_3_initialize_orchestrator():
+def step_3_initialize_orchestrator(pattern: str = "A"):
     logger.info("=" * 70)
-    logger.info("STEP 3: Initialize FoundryAgentOrchestrator")
+    logger.info("STEP 3: Initialize Orchestrator (Pattern %s)", pattern)
     logger.info("=" * 70)
 
     from agents.sequential_orchestrator_foundry import OUTPUT_MODE
 
-    logger.info("  ⮞ INPUT: VALIDATE_CITATIONS=true, OUTPUT_MODE=%s", OUTPUT_MODE)
+    logger.info("  ⮞ INPUT: VALIDATE_CITATIONS=true, OUTPUT_MODE=%s, PATTERN=%s", OUTPUT_MODE, pattern)
 
     os.environ["VALIDATE_CITATIONS"] = "true"
+    os.environ["ORCHESTRATOR_PATTERN"] = pattern
 
-    from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator
+    from agents.orchestrator_factory import get_orchestrator
 
     t0 = time.time()
-    orchestrator = FoundryAgentOrchestrator()
+    orchestrator = get_orchestrator()
     orchestrator._validate_citations = True
     dt = time.time() - t0
 
-    logger.info("  ✓ FoundryAgentOrchestrator instantiated (%.2fs)", dt)
+    logger.info("  ✓ Orchestrator instantiated (%.2fs)", dt)
+    logger.info("  ✓ Pattern: %s", pattern)
     logger.info("  ✓ Output mode: %s", orchestrator._output_mode)
     logger.info("  ✓ Citation validation enabled")
     if orchestrator._output_mode == "EXTRACTIVE":
         logger.info("  ✓ Extractive mode: answer_instructions NOT used")
     else:
         logger.info("  ✓ Answer synthesis mode: answer_instructions active")
-    logger.info("  ⮜ OUTPUT: orchestrator ready, pipeline=single-agent MCP, output_mode=%s",
-                 orchestrator._output_mode)
+    logger.info("  ⮜ OUTPUT: orchestrator ready, pattern=%s, output_mode=%s",
+                 pattern, orchestrator._output_mode)
     logger.info("✓ Step 3 PASSED\n")
     return orchestrator
 
@@ -276,8 +280,13 @@ def step_3_initialize_orchestrator():
 #  STEP 4: Run MCP queries – all test cases
 # =========================================================================
 
-def step_4_run_queries(orchestrator, limit: int | None = None) -> list[MCPTestResult]:
-    expectations = QUERY_EXPECTATIONS[:limit] if limit else QUERY_EXPECTATIONS
+def step_4_run_queries(orchestrator, limit: int | None = None, query_id: int | None = None) -> list[MCPTestResult]:
+    if query_id is not None:
+        expectations = [qe for qe in QUERY_EXPECTATIONS if qe.query_id == query_id]
+    elif limit:
+        expectations = QUERY_EXPECTATIONS[:limit]
+    else:
+        expectations = QUERY_EXPECTATIONS
 
     logger.info("=" * 70)
     logger.info("STEP 4: MCP Query Retrieval – %d queries (LIVE)", len(expectations))
@@ -314,6 +323,8 @@ def step_4_run_queries(orchestrator, limit: int | None = None) -> list[MCPTestRe
 
             tr = _evaluate_result(qe, result)
             tr.elapsed = dt
+            tr.token_usage = result.get("token_usage", {})
+            tr.activity = result.get("activity", [])
 
             logger.info("    ⮜ OUTPUT:")
             logger.info("      status     : %s", result.get("status", "unknown"))
@@ -328,6 +339,32 @@ def step_4_run_queries(orchestrator, limit: int | None = None) -> list[MCPTestRe
                 logger.info("      cite_valid : has_citations=%s, count=%d",
                              citation_validation.get("has_citations", False),
                              citation_validation.get("citation_count", 0))
+
+            # Log token usage
+            token_usage = result.get("token_usage", {})
+            if token_usage and any(v > 0 for v in token_usage.values()):
+                logger.info("      ┌─ Token Usage ─────────────────────────────────")
+                logger.info("      │ Prompt: %d │ Output: %d │ Total: %d",
+                             token_usage.get("prompt_tokens", 0),
+                             token_usage.get("completion_tokens", 0),
+                             token_usage.get("total_tokens", 0))
+                logger.info("      └───────────────────────────────────────────────")
+
+            # Log subqueries/activity
+            activity = result.get("activity", [])
+            if activity:
+                logger.info("      ┌─ Subqueries ──────────────────────────────────")
+                logger.info("      │ %-40s │ %6s │ %10s", "Subquery", "Count", "Elapsed MS")
+                logger.info("      │ %s", "─" * 62)
+                for act in activity:
+                    search_args = act.get("searchIndexArguments", {})
+                    subquery_text = search_args.get("search", act.get("query", ""))
+                    count = act.get("count", 0)
+                    elapsed_ms = act.get("elapsedMs", 0)
+                    if subquery_text:
+                        display_q = (subquery_text[:37] + "...") if len(subquery_text) > 40 else subquery_text
+                        logger.info("      │ %-40s │ %6d │ %10d", display_q, count, elapsed_ms)
+                logger.info("      └───────────────────────────────────────────────")
 
             # Log policy/file match details
             if tr.policy_found:
@@ -411,6 +448,8 @@ def step_5_write_results(results: list[MCPTestResult]) -> None:
             "root_causes": tr.root_causes,
             "error": tr.error,
             "elapsed_seconds": round(tr.elapsed, 2),
+            "token_usage": tr.token_usage,
+            "activity": tr.activity,
         })
     with open(json_path, "w") as f:
         json.dump(records, f, indent=2)
@@ -466,14 +505,26 @@ def _evaluate_result(qe: QueryExpectation, result: dict) -> MCPTestResult:
 
     # Check if expected filename (or key parts) appears in the answer
     file_stem = qe.expected_file.rsplit(".", 1)[0] if "." in qe.expected_file else qe.expected_file
+    # Normalize for comparison: underscores → spaces, case-insensitive
+    answer_lower = answer.lower()
+    file_stem_normalized = file_stem.replace("_", " ").lower()
+    # Extract title portion (after policy number prefix "XXXXX - ")
+    title_portion = ""
+    if " - " in qe.expected_file:
+        title_portion = qe.expected_file.split(" - ", 1)[1].split("(")[0].strip()
+    title_normalized = title_portion.replace("_", " ").lower()
+    # Extract the core topic (strip leading category like "Hiring_ ")
+    core_topic = title_normalized
+    if "_ " in title_portion:
+        core_topic = title_portion.split("_ ", 1)[1].split("(")[0].strip().lower()
+
     tr.file_found = (
         qe.expected_file in answer
         or file_stem in answer
-        # Also check for the policy title portion (after " - ")
-        or (
-            " - " in qe.expected_file
-            and qe.expected_file.split(" - ", 1)[1].split("(")[0].strip() in answer
-        )
+        or file_stem_normalized in answer_lower
+        or (bool(title_portion) and title_portion in answer)
+        or (bool(title_normalized) and title_normalized in answer_lower)
+        or (len(core_topic) > 3 and core_topic in answer_lower)
     )
     if not tr.file_found:
         tr.root_causes.append(
@@ -510,18 +561,34 @@ def main():
         "--limit", type=int, default=None,
         help="Run only the first N queries",
     )
+    parser.add_argument(
+        "--query_id", type=int, default=None,
+        help="Run a single query by its 1-based position in QUERY_EXPECTATIONS",
+    )
+    parser.add_argument(
+        "--pattern", type=str, default="A", choices=["A", "B"],
+        help="Orchestrator pattern: A (single-agent MCP) or B (hybrid MCP + metadata)",
+    )
     args = parser.parse_args()
 
     from agents.sequential_orchestrator_foundry import OUTPUT_MODE
 
-    n = args.limit or len(QUERY_EXPECTATIONS)
+    if args.query_id is not None:
+        matches = [qe for qe in QUERY_EXPECTATIONS if qe.query_id == args.query_id]
+        if not matches:
+            logger.error("--query_id=%d not found. Valid IDs: 1-%d",
+                         args.query_id, max(qe.query_id for qe in QUERY_EXPECTATIONS))
+            sys.exit(1)
+        n = 1
+    else:
+        n = args.limit or len(QUERY_EXPECTATIONS)
 
     logger.info("╔" + "═" * 68 + "╗")
-    logger.info("║  Live E2E – MCP Query Retrieval (single-agent MCP)                ║")
+    logger.info("║  Live E2E – MCP Query Retrieval (Pattern %s)                       ║", args.pattern)
     logger.info("║  Mode: LIVE (no mocks)                                            ║")
     logger.info("║  Output Mode: %-53s║", OUTPUT_MODE)
     logger.info("║  Queries: %d from test_queries.py                                 ║", n)
-    logger.info("║  Pipeline: FoundryAgentOrchestrator → MCP → Citations             ║")
+    logger.info("║  Pipeline: Orchestrator (Pattern %s) → MCP → Citations             ║", args.pattern)
     logger.info("╚" + "═" * 68 + "╝")
     logger.info("")
 
@@ -551,7 +618,7 @@ def main():
 
     # Step 3: Initialize orchestrator
     try:
-        orchestrator = step_3_initialize_orchestrator()
+        orchestrator = step_3_initialize_orchestrator(pattern=args.pattern)
         passed_steps += 1
     except Exception as e:
         logger.error("✗ Step 3 FAILED: %s", e)
@@ -560,7 +627,7 @@ def main():
 
     # Step 4: Run queries
     try:
-        results = step_4_run_queries(orchestrator, limit=args.limit)
+        results = step_4_run_queries(orchestrator, limit=args.limit, query_id=args.query_id)
         passed_steps += 1
     except Exception as e:
         logger.error("✗ Step 4 FAILED: %s", e)

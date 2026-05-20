@@ -542,6 +542,20 @@ class AzureAISearchClient:
         answer_instructions = _FOUNDRY_AGENT_CONFIG.get("answer_instructions", "")
         retrieval_instructions = _FOUNDRY_AGENT_CONFIG.get("retrieval_instructions", "")
 
+        # Inject mandatory file-location instruction into answer_instructions
+        # so the KB's internal LLM preserves metadata_storage_path in answers
+        location_instruction = (
+            "\nCRITICAL: When the user asks for a file location, path, URL, or "
+            "where a document is stored, you MUST include the exact "
+            "metadata_storage_path and blob_url values from the source data "
+            "in your response. Never say the path was not provided if it "
+            "exists in the source_data fields."
+        )
+        if answer_instructions and "metadata_storage_path" not in answer_instructions:
+            answer_instructions += location_instruction
+        elif not answer_instructions:
+            answer_instructions = location_instruction.strip()
+
         # Resolve reasoning effort from config
         reasoning_effort_str = _AGENTIC_CONFIG.get(
             "retrieval_reasoning_effort",
@@ -571,7 +585,7 @@ class AzureAISearchClient:
 
             output_mode = (
                 KnowledgeRetrievalOutputMode.EXTRACTIVE_DATA
-                if output_mode_str == "EXTRACTIVE_DATA"
+                if output_mode_str.upper() in ("EXTRACTIVE_DATA", "EXTRACTIVE")
                 else KnowledgeRetrievalOutputMode.ANSWER_SYNTHESIS
             )
 

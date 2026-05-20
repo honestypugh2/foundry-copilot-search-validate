@@ -384,25 +384,24 @@ def step_4_test_individual_agents() -> dict[str, Any]:
                  query[:40], len(ref_output["references"]),
                  ref_output["is_grounded"], bool(agentic_answer))
 
+    # synthesize_answer expects validated_sources as List[str] (content strings)
+    source_strings = [
+        s.get("content", "") if isinstance(s, dict) else str(s)
+        for s in val_output["validated_sources"]
+    ]
+
     if agentic_answer:
-        result = synth.run(
-            user_query=query,
-            validated_sources=val_output["validated_sources"],
-            references=ref_output["references"],
-            is_grounded=True,
-            agentic_answer=agentic_answer,
-        )
+        # When agentic retrieval already produced an answer, pass it through
         logger.info("    ⮜ OUTPUT: source=agentic_retrieval (passthrough)")
-        logger.info("      answer: %s...", result["answer"][:100])
+        logger.info("      answer: %s...", agentic_answer[:100])
     else:
-        result = synth.run(
+        answer = synth.synthesize_answer(
             user_query=query,
-            validated_sources=val_output["validated_sources"],
+            validated_sources=source_strings,
             references=ref_output["references"],
-            is_grounded=True,
         )
-        logger.info("    ⮜ OUTPUT: source=%s", result["source"])
-        logger.info("      answer: %s...", result["answer"][:100])
+        logger.info("    ⮜ OUTPUT: source=foundry_agent")
+        logger.info("      answer: %s...", answer[:100])
 
     logger.info("")
     logger.info("✓ Step 4 PASSED\n")
@@ -444,11 +443,12 @@ def step_6_foundry_orchestrator() -> list[dict]:
     logger.info("STEP 6: Foundry Orchestrator – %d queries (LIVE)", len(TEST_QUERIES))
     logger.info("=" * 70)
 
-    from agents.sequential_orchestrator_foundry import (
-        SequentialWorkflowOrchestratorFoundry,
-    )
+    from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator
 
-    orch = SequentialWorkflowOrchestratorFoundry()
+    # Step 6 tests the full multi-step pipeline (retrieval → validation →
+    # reference → synthesis).  Force multi_step mode on the instance.
+    orch = FoundryAgentOrchestrator()
+    orch._pipeline_mode = "multi_step"
     logger.info("  project_endpoint : %s",
                  orch.project_endpoint[:45] + "..." if orch.project_endpoint else "(not set)")
     logger.info("  deployment_name  : %s", orch.deployment_name)

@@ -16,10 +16,15 @@ retrieval:
 
 ## Pipeline Modes
 
-The orchestrator (`FoundryAgentOrchestrator`) supports two modes, controlled by the
-`PIPELINE_MODE` environment variable.
+The orchestrator is selected via the `ORCHESTRATOR_PATTERN` environment variable
+(default: `A`). Both patterns are accessed through the factory:
 
-### DEFAULT: Single-Agent MCP (`PIPELINE_MODE=single_agent`)
+```python
+from agents.orchestrator_factory import get_orchestrator
+orchestrator = get_orchestrator()  # reads ORCHESTRATOR_PATTERN env var
+```
+
+### Pattern A: Single-Agent MCP (`ORCHESTRATOR_PATTERN=A`, default)
 
 ```
 User Query → Foundry Agent (MCPTool + tool_choice="required") → Answer with Citations
@@ -52,6 +57,38 @@ formatting in one pass.  This is the Microsoft recommended architecture.
 The knowledge base only searches the configured index (`hr_lab_index`), which only
 contains documents from the trusted blob container.  Source validation is enforced at
 the **infrastructure level**, making a separate validation step redundant.
+
+### Pattern B: Hybrid MCP + Metadata Lookup (`ORCHESTRATOR_PATTERN=B`)
+
+```
+User Query → Foundry Agent (MCPTool + FunctionTool, tool_choice="required")
+    ├─ knowledge_base_retrieve  → content/policy questions (MCP)
+    └─ file_metadata_lookup     → file-location questions (direct search)
+```
+
+Pattern B adds a **custom function tool** (`file_metadata_lookup`) alongside the MCP
+tool on a single Foundry Agent. The agent routes queries to the appropriate tool based
+on instructions:
+
+- **Content questions** ("What does Policy 51350 say?") → `knowledge_base_retrieve`
+- **File-location questions** ("Where is the PTO policy stored?") → `file_metadata_lookup`
+
+**Key implementation detail:** The Foundry Agent API does not transparently handle MCP
+tool calls when mixed with a FunctionTool on the same agent. When the agent calls
+`knowledge_base_retrieve`, the client **intercepts** the call, executes
+`agentic_retrieve()` directly, and submits the result back as `function_call_output`.
+This preserves the MCP architecture while providing direct access to activity data
+(subqueries, elapsed times).
+
+**Why Pattern B for file-location queries:**
+
+| Concern | Pattern A (MCP only) | Pattern B (MCP + metadata tool) |
+|---------|---------------------|-------------------------------|
+| Content answers | ✓ Full KB retrieval | ✓ Full KB retrieval (intercepted) |
+| File paths/URLs | LLM-synthesized (may hallucinate) | Deterministic from index |
+| Activity data | Not captured | Direct access via interception |
+| Latency (content) | ~10–15s | ~20–35s (agentic_retrieve + response) |
+| Latency (metadata) | ~10–15s | ~5–10s (hybrid_search only) |
 
 ### OPTIONAL: Multi-Step Pipeline (`PIPELINE_MODE=multi_step`)
 
@@ -117,6 +154,7 @@ The validation results are included in the response under the `citation_validati
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ORCHESTRATOR_PATTERN` | `A` | Pattern: `A` (single-agent MCP) or `B` (hybrid MCP + metadata lookup) |
 | `PIPELINE_MODE` | `single_agent` | Pipeline mode: `single_agent` (recommended) or `multi_step` (learning) |
 | `VALIDATE_CITATIONS` | `false` | Enable post-processing citation validation |
 | `PERSIST_FOUNDRY_AGENTS` | `false` | Keep Foundry Agents after invocation (otherwise cleaned up) |
@@ -251,7 +289,9 @@ sequenceDiagram
 
 | File | Role |
 |------|------|
-| `agents/sequential_orchestrator_foundry.py` | Main orchestrator — `FoundryAgentOrchestrator` class |
+| `agents/orchestrator_factory.py` | Factory — routes to Pattern A or B based on `ORCHESTRATOR_PATTERN` |
+| `agents/sequential_orchestrator_foundry.py` | Pattern A orchestrator — `FoundryAgentOrchestrator` (single-agent MCP) |
+| `agents/orchestrator_pattern_b.py` | Pattern B orchestrator — `PatternBOrchestrator` (MCP + metadata lookup) |
 | `agents/foundry_client.py` | Shared Foundry client helpers (sync API) |
 | `agents/answer_synthesis_agent.py` | Standalone answer synthesis agent (used by Agent Framework orchestrator) |
 | `agents/retrieval_agent.py` | Retrieval agent (used only in multi-step mode) |
@@ -265,20 +305,23 @@ sequenceDiagram
 ## Quick Start
 
 ```bash
-# Default: single-agent MCP (recommended)
-export PIPELINE_MODE=single_agent
+# Pattern A: single-agent MCP (default, recommended for content questions)
+export ORCHESTRATOR_PATTERN=A
+
+# Pattern B: hybrid MCP + metadata lookup (recommended for file-location queries)
+export ORCHESTRATOR_PATTERN=B
 
 # Optional: enable citation validation
 export VALIDATE_CITATIONS=true
 
-# Alternative: legacy multi-step pipeline (learning reference)
+# Legacy: multi-step pipeline (learning reference, not recommended)
 export PIPELINE_MODE=multi_step
 ```
 
 ```python
-from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator
+from agents.orchestrator_factory import get_orchestrator
 
-orchestrator = FoundryAgentOrchestrator()
+orchestrator = get_orchestrator()
 result = orchestrator.process_query("What is the PTO policy?")
 print(result["answer"])
 ```

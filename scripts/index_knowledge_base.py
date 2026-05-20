@@ -19,16 +19,16 @@ Chunks are projected into ``hr_lab_index`` via index projections.
 
 Usage:
     # Full setup: index + indexer + skillset + agentic retrieval
-    PYTHONPATH=$PWD/src uv run python src/scripts/index_knowledge_base.py
+    uv run python scripts/index_knowledge_base.py
 
     # Index + indexer only (skip agentic retrieval provisioning)
-    PYTHONPATH=$PWD/src uv run python src/scripts/index_knowledge_base.py --skip-agentic
+    uv run python scripts/index_knowledge_base.py --skip-agentic
 
     # Reset: delete and recreate the indexer
-    PYTHONPATH=$PWD/src uv run python src/scripts/index_knowledge_base.py --reset
+    uv run python scripts/index_knowledge_base.py --reset
 
     # Dry run: validate config without creating resources
-    PYTHONPATH=$PWD/src uv run python src/scripts/index_knowledge_base.py --dry-run
+    uv run python scripts/index_knowledge_base.py --dry-run
 """
 
 import argparse
@@ -38,8 +38,10 @@ import os
 import sys
 from pathlib import Path
 
-# Ensure src is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Ensure src is importable (search, agents, config modules live under src/)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT / "src"))
+sys.path.insert(0, str(_REPO_ROOT))
 
 from dotenv import load_dotenv
 
@@ -53,13 +55,20 @@ logging.basicConfig(
 # Config
 # ---------------------------------------------------------------------------
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "search_config.json"
+# Prefer src/config/search_config.json; fall back to root config/ for compat
+_CONFIG_PATH_PRIMARY = _REPO_ROOT / "src" / "config" / "search_config.json"
+_CONFIG_PATH_FALLBACK = _REPO_ROOT / "config" / "search_config.json"
+_CONFIG_PATH = _CONFIG_PATH_PRIMARY if _CONFIG_PATH_PRIMARY.exists() else _CONFIG_PATH_FALLBACK
 
 
 def _load_config() -> dict:
     if not _CONFIG_PATH.exists():
-        logger.error("search_config.json not found at %s", _CONFIG_PATH)
+        logger.error(
+            "search_config.json not found at %s or %s",
+            _CONFIG_PATH_PRIMARY, _CONFIG_PATH_FALLBACK,
+        )
         sys.exit(1)
+    logger.info("Using config: %s", _CONFIG_PATH)
     with open(_CONFIG_PATH) as f:
         return json.load(f)
 
@@ -541,6 +550,7 @@ def create_indexer(
             FieldMapping,
             FieldMappingFunction,
             IndexingParameters,
+            IndexingParametersConfiguration,
             SearchIndexer,
         )
     except ImportError:
@@ -620,11 +630,11 @@ def create_indexer(
         ],
         parameters=IndexingParameters(
             max_failed_items=max_failed,
-            configuration={
-                "dataToExtract": "contentAndMetadata",
-                "allowSkillsetToReadFileData": True,
-                "excludedFileNameExtensions": excluded_ext_str,
-            },
+            configuration=IndexingParametersConfiguration(
+                data_to_extract="contentAndMetadata",
+                allow_skillset_to_read_file_data=True,
+                excluded_file_name_extensions=excluded_ext_str,
+            ),
         ),
     )
 

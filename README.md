@@ -67,14 +67,23 @@ only searches `hr_lab_index`, which only contains documents from the trusted
 
 ## Pipeline Modes
 
-The orchestrator (`FoundryAgentOrchestrator`) supports two modes, controlled by
-the `PIPELINE_MODE` environment variable.
+The orchestrator is selected via the `ORCHESTRATOR_PATTERN` environment variable
+(default: `A`). Both patterns use the `get_orchestrator()` factory:
 
-### Default: Single-Agent MCP (`PIPELINE_MODE=single_agent`)
+```python
+from agents.orchestrator_factory import get_orchestrator
+orchestrator = get_orchestrator()
+result = orchestrator.process_query("What is the PTO policy?")
+```
+
+### Pattern A: Single-Agent MCP (`ORCHESTRATOR_PATTERN=A`, default)
 
 ```
 User Query → Foundry Agent (MCPTool + tool_choice="required") → Answer with Citations
 ```
+
+A single Foundry Agent with an MCPTool handles retrieval, reasoning, and citation
+formatting in one pass. The platform handles the MCP call transparently.
 
 | Concern | Single-Agent |
 |---------|-------------|
@@ -82,6 +91,25 @@ User Query → Foundry Agent (MCPTool + tool_choice="required") → Answer with 
 | Latency | Low |
 | Citation quality | Agent-native MCP annotations |
 | Source trust | Enforced at index level |
+
+### Pattern B: Hybrid MCP + Metadata Lookup (`ORCHESTRATOR_PATTERN=B`)
+
+```
+User Query → Foundry Agent (MCPTool + FunctionTool, tool_choice="required")
+    ├─ knowledge_base_retrieve  → content/policy questions (MCP, intercepted client-side)
+    └─ file_metadata_lookup     → file-location questions (direct index search)
+```
+
+Pattern B adds a **custom function tool** (`file_metadata_lookup`) alongside the MCP tool.
+The agent routes queries to the appropriate tool:
+
+- **Content questions** → `knowledge_base_retrieve` (MCP tool, intercepted and executed
+  via `agentic_retrieve()` client-side — gives access to subquery activity data)
+- **File-location questions** → `file_metadata_lookup` (direct `hybrid_search` returning
+  only metadata fields: `metadata_storage_path`, `metadata_storage_name`, `blob_url`)
+
+This provides **deterministic file paths** — no LLM hallucination risk for metadata —
+while preserving full KB retrieval for content questions.
 
 ### Optional: Multi-Step Pipeline (`PIPELINE_MODE=multi_step`)
 
@@ -115,12 +143,14 @@ src/
 ├── agents/                             # Foundry Agent Service (production)
 │   ├── __init__.py
 │   ├── foundry_client.py               # Shared AIProjectClient + OpenAI helpers
+│   ├── orchestrator_factory.py         # Pattern A/B routing (get_orchestrator)
+│   ├── orchestrator_pattern_b.py       # Pattern B: MCP + metadata lookup
 │   ├── register_agents.py              # One-time Foundry Agent registration
 │   ├── retrieval_agent.py              # Agentic retrieval / hybrid search
 │   ├── source_validator_agent.py       # Source trust validation
 │   ├── reference_validator_agent.py    # Citation extraction + grounding
 │   ├── answer_synthesis_agent.py       # Answer synthesis (MCP or context-based)
-│   └── sequential_orchestrator_foundry.py  # Main orchestrator (single-agent MCP)
+│   └── sequential_orchestrator_foundry.py  # Pattern A orchestrator (single-agent MCP)
 ├── agents_af/                          # Agent Framework path (alternative)
 │   ├── retrieval_agent.py
 │   ├── source_validator_agent.py
@@ -179,7 +209,7 @@ and `blob_url` into the child index `hr_lab_index`.
 
 ```bash
 # 1. Copy .env.example and fill in your values
-cp config/.env.example .env
+cp .env.example .env
 
 # 2. Install dependencies
 uv sync
@@ -224,6 +254,7 @@ the full setup guide.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ORCHESTRATOR_PATTERN` | `A` | `A` (single-agent MCP) or `B` (hybrid MCP + metadata lookup) |
 | `PIPELINE_MODE` | `single_agent` | `single_agent` (recommended) or `multi_step` (learning) |
 | `VALIDATE_CITATIONS` | `false` | Enable post-processing citation validation |
 | `AZURE_AI_PROJECT_ENDPOINT` | — | Foundry project endpoint |

@@ -207,6 +207,41 @@ PYTHONPATH=$PWD/src uv run python src/tests/test_full_flow.py --mock
 
 ---
 
+## Test 4b: MCP Query Retrieval — Pattern A & B
+
+The primary test for the production pipelines. Supports both orchestrator patterns:
+
+```bash
+cd $PROJECT_ROOT
+source .env
+
+# Pattern A: single-agent MCP (default)
+PYTHONPATH=$PWD/src python tests/test_mcp_query_retrieval.py --pattern A --query_id=21
+
+# Pattern B: hybrid MCP + metadata lookup
+PYTHONPATH=$PWD/src python tests/test_mcp_query_retrieval.py --pattern B --query_id=21
+
+# Run all queries for a pattern
+PYTHONPATH=$PWD/src python tests/test_mcp_query_retrieval.py --pattern B
+
+# Run first N queries
+PYTHONPATH=$PWD/src python tests/test_mcp_query_retrieval.py --pattern A --limit 5
+```
+
+**What it validates:**
+- Azure environment + credentials (Step 1)
+- SDK imports (Step 2)
+- Orchestrator initialization via factory (Step 3)
+- Live query execution with policy/file assertions, token usage, and activity tracking (Step 4)
+- Results written to `tests/mcp_query_retrieval_results.json` (Step 5)
+
+**Pattern B specific behavior:**
+- Agent calls `knowledge_base_retrieve` (MCP) for content questions → client intercepts, executes `agentic_retrieve()` directly, submits result back
+- Agent calls `file_metadata_lookup` for file-location questions → client executes `hybrid_search()`, submits deterministic metadata back
+- Activity data (subqueries, elapsed times) captured from the intercepted KB call
+
+---
+
 ## Test 5: Sample HR Policy Questions
 
 Use these questions to test various policy areas. Expected results should

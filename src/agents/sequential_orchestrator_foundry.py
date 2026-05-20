@@ -168,6 +168,23 @@ class FoundryAgentOrchestrator:
             https://github.com/Azure-Samples/azure-search-python-samples/blob/main/
             agentic-retrieval-pipeline-example/agent-example.ipynb
         """
+        # Mandatory file-location instruction appended to all modes
+        file_location_instruction = (
+            "\n\nCRITICAL — FILE LOCATION QUERIES:\n"
+            "When the user asks where a document is located, asks for a file "
+            "path, URL, link, or storage location, you MUST:\n"
+            "1. Look at the `metadata_storage_path` and `blob_url` fields in "
+            "the reference source_data returned by the knowledge base tool.\n"
+            "2. Return the EXACT value of `metadata_storage_path` (the full "
+            "Azure Blob Storage path) and/or `blob_url` in your answer.\n"
+            "3. Also include `metadata_storage_name` (the filename).\n"
+            "4. NEVER say 'no metadata_storage_path was provided' or 'path "
+            "not available' if these fields exist in the source_data of any "
+            "reference returned by the tool.\n"
+            "5. Present the path clearly, e.g.: "
+            "'The file is located at: [metadata_storage_path value]'\n"
+        )
+
         if self._output_mode == "EXTRACTIVE":
             return (
                 "You are a helpful HR policy assistant. Use the knowledge base "
@@ -178,12 +195,13 @@ class FoundryAgentOrchestrator:
                 "`【message_idx:search_idx†source_name】`\n"
                 "Do not synthesize or rephrase the content. Present the "
                 "extracted text directly with its source citation.\n"
+                + file_location_instruction
             )
 
         # ANSWER_SYNTHESIS mode (default)
         custom = _AGENT_CONFIG.get("answer_instructions", "")
         if custom:
-            return custom
+            return custom + file_location_instruction
         return (
             "You are a helpful HR policy assistant that must use the knowledge "
             "base to answer all the questions from user. You must never answer "
@@ -193,6 +211,7 @@ class FoundryAgentOrchestrator:
             "`【message_idx:search_idx†source_name】`\n"
             "If you cannot find the answer in the provided knowledge base you "
             'must respond with "I don\'t know".\n'
+            + file_location_instruction
         )
 
     # ==================================================================
@@ -237,6 +256,8 @@ class FoundryAgentOrchestrator:
 
                 try:
                     answer_text = ""
+                    token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
                     stream = await openai_client.responses.create(
                         conversation=conversation.id,
                         tool_choice="required",
@@ -252,8 +273,25 @@ class FoundryAgentOrchestrator:
                     async for event in stream:
                         if event.type == "response.output_text.delta":
                             answer_text += event.delta
+                        elif event.type == "response.completed":
+                            if hasattr(event, "response") and hasattr(event.response, "usage"):
+                                usage = event.response.usage
+                                if usage:
+                                    token_usage["prompt_tokens"] += getattr(usage, "input_tokens", 0)
+                                    token_usage["completion_tokens"] += getattr(usage, "output_tokens", 0)
+                                    token_usage["total_tokens"] += getattr(usage, "total_tokens", 0)
 
                     answer = answer_text or "The agent did not produce a response."
+
+                    # Capture subqueries/activity via direct agentic retrieval
+                    activity = []
+                    try:
+                        ar_result = self._search_client.agentic_retrieve(
+                            messages=[{"role": "user", "content": user_query}]
+                        )
+                        activity = ar_result.get("activity", [])
+                    except Exception as e:
+                        logger.debug("Activity capture failed (non-blocking): %s", e)
 
                     result: Dict[str, Any] = {
                         "status": "completed",
@@ -262,7 +300,10 @@ class FoundryAgentOrchestrator:
                         "model": self.deployment_name,
                         "output_mode": self._output_mode.lower(),
                         "pipeline_mode": "single_agent",
+                        "pattern": "A",
                         "is_grounded": True,
+                        "token_usage": token_usage,
+                        "activity": activity,
                         "steps": {
                             "mcp_retrieval_and_synthesis": {
                                 "status": "completed",
