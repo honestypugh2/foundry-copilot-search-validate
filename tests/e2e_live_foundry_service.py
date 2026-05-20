@@ -3,29 +3,36 @@
 Live End-to-End – Foundry Agent Service Path (agents/)
 
 NO mocks. Connects to live Azure AI Search and Azure AI Foundry.
-Every query runs the full Foundry Agent Service pipeline:
+Tests the FoundryAgentOrchestrator based on PIPELINE_MODE:
 
-    Azure AI Search (Agentic Retrieval)
-        → RetrievalAgent             (local — agentic / hybrid search)
-        → SourceValidatorAgent       (local + optional Foundry Agent)
-        → ReferenceValidatorAgent    (local + optional Foundry Agent)
-        → AnswerSynthesisAgent       (Foundry Agent via azure-ai-projects)
+    PIPELINE_MODE=single_agent (DEFAULT — MS recommended):
+        User query → Foundry Agent (MCPTool, tool_choice="required") → Answer
+        Single-agent handles retrieval, reasoning, and citation in one pass.
+
+    PIPELINE_MODE=multi_step (legacy / learning reference):
+        Azure AI Search (Agentic Retrieval)
+            → RetrievalAgent             (local — agentic / hybrid search)
+            → SourceValidatorAgent       (local + optional Foundry Agent)
+            → ReferenceValidatorAgent    (local + optional Foundry Agent)
+            → AnswerSynthesisAgent       (Foundry Agent via azure-ai-projects)
 
 Verifies that Foundry Agents appear in the Azure AI Foundry Portal
 by registering agents via ensure_agent() and querying them.
-
-Also tests the original AF SequentialBuilder orchestrator for comparison.
 
 Usage:
     cd foundry-copilot-search-validate
     PYTHONPATH=$PWD/src python tests/e2e_live_foundry_service.py
 
+    # Force multi-step pipeline:
+    PIPELINE_MODE=multi_step PYTHONPATH=$PWD/src python tests/e2e_live_foundry_service.py
+
     # Persist agents in Foundry Portal (don't delete after test):
     PERSIST_FOUNDRY_AGENTS=true PYTHONPATH=$PWD/src python tests/e2e_live_foundry_service.py
 
-Environment variables required (from src/.env):
+Environment variables required (from .env):
     AZURE_SEARCH_ENDPOINT
     AZURE_AI_PROJECT_ENDPOINT
+    PIPELINE_MODE              (optional, default: single_agent)
 """
 
 import json
@@ -443,17 +450,21 @@ def step_6_foundry_orchestrator() -> list[dict]:
     logger.info("STEP 6: Foundry Orchestrator – %d queries (LIVE)", len(TEST_QUERIES))
     logger.info("=" * 70)
 
-    from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator
+    from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator, PIPELINE_MODE
 
-    # Step 6 tests the full multi-step pipeline (retrieval → validation →
-    # reference → synthesis).  Force multi_step mode on the instance.
     orch = FoundryAgentOrchestrator()
-    orch._pipeline_mode = "multi_step"
+    pipeline_mode = orch._pipeline_mode  # respects PIPELINE_MODE env var
+
     logger.info("  project_endpoint : %s",
                  orch.project_endpoint[:45] + "..." if orch.project_endpoint else "(not set)")
     logger.info("  deployment_name  : %s", orch.deployment_name)
-    logger.info("  pipeline         : Retrieval → SourceValidation → RefValidation → "
-                 "AnswerSynthesis (Foundry Agent)")
+    logger.info("  pipeline_mode    : %s", pipeline_mode)
+
+    if pipeline_mode == "multi_step":
+        logger.info("  pipeline         : Retrieval → SourceValidation → RefValidation → "
+                     "AnswerSynthesis (Foundry Agent)")
+    else:
+        logger.info("  pipeline         : Single-agent MCP (tool_choice=required)")
     logger.info("")
 
     results = []
@@ -476,34 +487,56 @@ def step_6_foundry_orchestrator() -> list[dict]:
             dt = time.time() - t0
 
             assert result["status"] == "completed", f"Status: {result['status']}"
-            assert result["is_grounded"] is True, "Not grounded"
-            assert len(result["matches"]) > 0, "No matches"
-            assert len(result["references"]) > 0, "No references"
             assert result["answer"], "Empty answer"
 
-            logger.info("    ⮜ OUTPUT:")
-            logger.info("      status     : %s", result["status"])
-            logger.info("      matches    : %d", len(result["matches"]))
-            logger.info("      references : %d", len(result["references"]))
-            logger.info("      grounded   : %s", result["is_grounded"])
-            logger.info("      answer     : %s...", result["answer"][:120])
-            logger.info("      elapsed    : %.2fs", dt)
+            if pipeline_mode == "multi_step":
+                # Multi-step returns matches, references, is_grounded
+                assert result["is_grounded"] is True, "Not grounded"
+                assert len(result["matches"]) > 0, "No matches"
+                assert len(result["references"]) > 0, "No references"
 
-            for j, m in enumerate(result["matches"][:3]):
-                logger.info("      match[%d] policy=%s  file=%s",
-                             j, m.get("policyNumber", "?"),
-                             m.get("fileName", "?")[:60])
+                logger.info("    ⮜ OUTPUT:")
+                logger.info("      status     : %s", result["status"])
+                logger.info("      matches    : %d", len(result["matches"]))
+                logger.info("      references : %d", len(result["references"]))
+                logger.info("      grounded   : %s", result["is_grounded"])
+                logger.info("      answer     : %s...", result["answer"][:120])
+                logger.info("      elapsed    : %.2fs", dt)
 
-            # Check expected policy
-            if qe.expected_policy:
-                policies_found = [
-                    m.get("policyNumber", "") for m in result["matches"]
-                ]
-                if qe.expected_policy in str(policies_found):
-                    logger.info("    ✓ expected policy %s FOUND", qe.expected_policy)
-                else:
-                    logger.warning("    ⚠ expected policy %s NOT in top results: %s",
-                                    qe.expected_policy, policies_found[:5])
+                for j, m in enumerate(result["matches"][:3]):
+                    logger.info("      match[%d] policy=%s  file=%s",
+                                 j, m.get("policyNumber", "?"),
+                                 m.get("fileName", "?")[:60])
+
+                # Check expected policy
+                if qe.expected_policy:
+                    policies_found = [
+                        m.get("policyNumber", "") for m in result["matches"]
+                    ]
+                    if qe.expected_policy in str(policies_found):
+                        logger.info("    ✓ expected policy %s FOUND", qe.expected_policy)
+                    else:
+                        logger.warning("    ⚠ expected policy %s NOT in top results: %s",
+                                        qe.expected_policy, policies_found[:5])
+            else:
+                # Single-agent MCP returns answer + is_grounded (always True)
+                assert result.get("is_grounded") is True, "Not grounded"
+
+                logger.info("    ⮜ OUTPUT:")
+                logger.info("      status     : %s", result["status"])
+                logger.info("      mode       : %s", result.get("pipeline_mode", "single_agent"))
+                logger.info("      pattern    : %s", result.get("pattern", "A"))
+                logger.info("      grounded   : %s", result.get("is_grounded"))
+                logger.info("      answer     : %s...", result["answer"][:120])
+                logger.info("      elapsed    : %.2fs", dt)
+
+                # Check expected policy in answer text (single-agent embeds it)
+                if qe.expected_policy:
+                    if qe.expected_policy in result["answer"]:
+                        logger.info("    ✓ expected policy %s in answer", qe.expected_policy)
+                    else:
+                        logger.warning("    ⚠ expected policy %s NOT found in answer text",
+                                        qe.expected_policy)
 
             results.append({"query": query, "status": "passed", "result": result})
             passed += 1
@@ -570,9 +603,12 @@ def step_8_verify_agents_in_portal() -> None:
 # =========================================================================
 
 def main():
+    pipeline_mode = os.getenv("PIPELINE_MODE", "single_agent").lower()
+
     logger.info("╔" + "═" * 68 + "╗")
     logger.info("║  Live E2E – Foundry Agent Service (agents/)                       ║")
     logger.info("║  Mode: LIVE (no mocks)                                            ║")
+    logger.info("║  Pipeline: %-56s ║", pipeline_mode)
     logger.info("║  Queries: %d from test_queries.py                                 ║",
                  len(TEST_QUERIES))
     logger.info("║  PERSIST_FOUNDRY_AGENTS: %s                                       ║",
@@ -583,17 +619,24 @@ def main():
     total_start = time.time()
     passed = 0
     failed = 0
-    total = 7
 
+    # Core steps always run
     steps = [
         ("Step 1: Verify environment", step_1_verify_environment),
         ("Step 2: Verify SDK imports", step_2_verify_imports),
         ("Step 3: Register agents in Foundry Portal", step_3_register_agents),
-        ("Step 4: Individual agents (LIVE)", step_4_test_individual_agents),
-        ("Step 5: Invoke Foundry Agent (conversations API)", step_5_invoke_foundry_agent),
-        ("Step 6: Foundry orchestrator (LIVE)", step_6_foundry_orchestrator),
-        ("Step 7: Final portal verification", step_8_verify_agents_in_portal),
     ]
+
+    # Steps 4-5 test individual pipeline agents (only relevant for multi_step)
+    if pipeline_mode == "multi_step":
+        steps.append(("Step 4: Individual agents (LIVE)", step_4_test_individual_agents))
+        steps.append(("Step 5: Invoke Foundry Agent (conversations API)", step_5_invoke_foundry_agent))
+
+    # Step 6 tests the full orchestrator (both modes)
+    steps.append(("Step 6: Foundry orchestrator (LIVE)", step_6_foundry_orchestrator))
+    steps.append(("Step 7: Final portal verification", step_8_verify_agents_in_portal))
+
+    total = len(steps)
 
     for name, fn in steps:
         try:
@@ -609,7 +652,8 @@ def main():
     logger.info("FINAL RESULTS")
     logger.info("=" * 70)
     logger.info("  Steps   : %d/%d passed, %d failed", passed, total, failed)
-    logger.info("  Queries : %d total (run through 2 orchestrators)", len(TEST_QUERIES))
+    logger.info("  Pipeline: %s", pipeline_mode)
+    logger.info("  Queries : %d total", len(TEST_QUERIES))
     logger.info("  Elapsed : %.1fs", total_time)
     logger.info("=" * 70)
 

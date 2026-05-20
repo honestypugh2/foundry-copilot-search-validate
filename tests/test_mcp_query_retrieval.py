@@ -357,10 +357,12 @@ def step_4_run_queries(orchestrator, limit: int | None = None, query_id: int | N
                 logger.info("      │ %-40s │ %6s │ %10s", "Subquery", "Count", "Elapsed MS")
                 logger.info("      │ %s", "─" * 62)
                 for act in activity:
-                    search_args = act.get("searchIndexArguments", {})
+                    if act.get("type") != "searchIndex":
+                        continue
+                    search_args = act.get("search_index_arguments", {})
                     subquery_text = search_args.get("search", act.get("query", ""))
                     count = act.get("count", 0)
-                    elapsed_ms = act.get("elapsedMs", 0)
+                    elapsed_ms = act.get("elapsed_ms", 0)
                     if subquery_text:
                         display_q = (subquery_text[:37] + "...") if len(subquery_text) > 40 else subquery_text
                         logger.info("      │ %-40s │ %6d │ %10d", display_q, count, elapsed_ms)
