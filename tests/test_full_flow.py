@@ -46,7 +46,7 @@ logger = logging.getLogger("test_full_flow")
 # Constants
 # ---------------------------------------------------------------------------
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "search_config.json"
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "src" / "config" / "search_config.json"
 
 from test_queries import TEST_QUERIES, QUERY_EXPECTATIONS
 

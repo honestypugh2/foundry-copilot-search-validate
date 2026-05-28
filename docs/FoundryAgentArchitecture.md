@@ -393,7 +393,7 @@ sequenceDiagram
 | `agents/retrieval_agent.py` | Retrieval agent (used only in multi-step mode) |
 | `agents/source_validator_agent.py` | Source validator (used only in multi-step mode) |
 | `agents/reference_validator_agent.py` | Reference validator (used only in multi-step mode) |
-| `config/search_config.json` | Centralized pipeline configuration |
+| `src/config/search_config.json` | Centralized pipeline configuration |
 | `search/azure_ai_search_client.py` | Azure AI Search client (index, KB, MCP endpoint) |
 
 ---

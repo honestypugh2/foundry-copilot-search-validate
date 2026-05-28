@@ -244,7 +244,7 @@ Both paths share:
 | **Azure Blob Storage** | `ask-hr-knowledge` container |
 | **Azure Function** | `/api/ask` endpoint |
 | **Copilot Studio** | `manifest.json` + `openapi.yaml` |
-| **Config** | `config/search_config.json` |
+| **Config** | `src/config/search_config.json` |
 
 ---
 

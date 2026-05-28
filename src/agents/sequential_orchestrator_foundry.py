@@ -45,6 +45,37 @@ from search.azure_ai_search_client import AzureAISearchClient
 
 logger = logging.getLogger(__name__)
 
+try:
+    from openai import APIConnectionError, APITimeoutError, RateLimitError, APIStatusError
+    from tenacity import (
+        AsyncRetrying,
+        retry_if_exception,
+        stop_after_attempt,
+        wait_exponential,
+        before_sleep_log,
+    )
+
+    def _is_transient_agent_error(exc: BaseException) -> bool:
+        if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
+            return True
+        if isinstance(exc, APIStatusError):
+            return getattr(exc, "status_code", None) in (408, 429, 500, 502, 503, 504)
+        return False
+
+    def _agent_retrying() -> AsyncRetrying:
+        return AsyncRetrying(
+            reraise=True,
+            stop=stop_after_attempt(4),
+            wait=wait_exponential(multiplier=1, min=1, max=10),
+            retry=retry_if_exception(_is_transient_agent_error),
+            before_sleep=before_sleep_log(logger, logging.WARNING),
+        )
+
+    AGENT_RETRY_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    AGENT_RETRY_AVAILABLE = False
+    logger.warning("tenacity/openai retry helpers unavailable; agent calls will not retry")
+
 # Load search config for foundry agent settings
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "search_config.json"
 if _CONFIG_PATH.exists():
@@ -258,18 +289,29 @@ class FoundryAgentOrchestrator:
                     answer_text = ""
                     token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-                    stream = await openai_client.responses.create(
-                        conversation=conversation.id,
-                        tool_choice="required",
-                        input=user_query,
-                        extra_body={
-                            "agent_reference": {
-                                "name": agent.name,
-                                "type": "agent_reference",
-                            }
-                        },
-                        stream=True,
-                    )
+                    async def _create_stream():
+                        return await openai_client.responses.create(
+                            conversation=conversation.id,
+                            tool_choice="required",
+                            input=user_query,
+                            extra_body={
+                                "agent_reference": {
+                                    "name": agent.name,
+                                    "type": "agent_reference",
+                                }
+                            },
+                            stream=True,
+                        )
+
+                    if AGENT_RETRY_AVAILABLE:
+                        stream = None
+                        async for attempt in _agent_retrying():
+                            with attempt:
+                                stream = await _create_stream()
+                    else:
+                        stream = await _create_stream()
+
+                    assert stream is not None, "Agent stream was not created"
                     async for event in stream:
                         if event.type == "response.output_text.delta":
                             answer_text += event.delta

@@ -55,18 +55,12 @@ logging.basicConfig(
 # Config
 # ---------------------------------------------------------------------------
 
-# Prefer src/config/search_config.json; fall back to root config/ for compat
-_CONFIG_PATH_PRIMARY = _REPO_ROOT / "src" / "config" / "search_config.json"
-_CONFIG_PATH_FALLBACK = _REPO_ROOT / "config" / "search_config.json"
-_CONFIG_PATH = _CONFIG_PATH_PRIMARY if _CONFIG_PATH_PRIMARY.exists() else _CONFIG_PATH_FALLBACK
+_CONFIG_PATH = _REPO_ROOT / "src" / "config" / "search_config.json"
 
 
 def _load_config() -> dict:
     if not _CONFIG_PATH.exists():
-        logger.error(
-            "search_config.json not found at %s or %s",
-            _CONFIG_PATH_PRIMARY, _CONFIG_PATH_FALLBACK,
-        )
+        logger.error("search_config.json not found at %s", _CONFIG_PATH)
         sys.exit(1)
     logger.info("Using config: %s", _CONFIG_PATH)
     with open(_CONFIG_PATH) as f:

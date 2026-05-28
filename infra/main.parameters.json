@@ -24,7 +24,25 @@
       "value": "text-embedding-3-small"
     },
     "searchSku": {
-      "value": "basic"
+      "value": "standard"
+    },
+    "semanticSearchTier": {
+      "value": "standard"
+    },
+    "enablePrivateEndpoints": {
+      "value": false
+    },
+    "disableLocalAuth": {
+      "value": false
+    },
+    "enableFunctionAuth": {
+      "value": false
+    },
+    "functionAuthClientId": {
+      "value": "${AZURE_FUNCTION_AUTH_CLIENT_ID=}"
+    },
+    "functionAuthAllowedClientIds": {
+      "value": []
     },
     "principalId": {
       "value": "${AZURE_PRINCIPAL_ID}"

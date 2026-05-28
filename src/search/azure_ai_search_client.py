@@ -11,12 +11,74 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+
+from typing import Any, Callable, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
 try:
-    from azure.core.credentials import AzureKeyCredential
+    from azure.core.exceptions import (
+        HttpResponseError,
+        ServiceRequestError,
+        ServiceResponseError,
+    )
+    AZURE_CORE_EXCEPTIONS_AVAILABLE = True
+except ImportError:
+    HttpResponseError = ServiceRequestError = ServiceResponseError = Exception  # type: ignore[assignment,misc]
+    AZURE_CORE_EXCEPTIONS_AVAILABLE = False
+
+try:
+    from tenacity import (
+        retry,
+        retry_if_exception,
+        stop_after_attempt,
+        wait_exponential,
+        before_sleep_log,
+    )
+
+    try:
+        from openai import (
+            APIConnectionError as _OAIConnErr,
+            APITimeoutError as _OAITimeoutErr,
+            RateLimitError as _OAIRateErr,
+            APIStatusError as _OAIStatusErr,
+        )
+        _OPENAI_RETRY_TYPES = (_OAIConnErr, _OAITimeoutErr, _OAIRateErr)
+        _OPENAI_STATUS_ERR: Optional[type] = _OAIStatusErr
+    except ImportError:  # pragma: no cover
+        _OPENAI_RETRY_TYPES = ()
+        _OPENAI_STATUS_ERR = None
+
+    def _is_transient_search_error(exc: BaseException) -> bool:
+        """Return True for retryable Azure SDK / network / OpenAI errors."""
+        if isinstance(exc, (ServiceRequestError, ServiceResponseError)):
+            return True
+        if isinstance(exc, HttpResponseError):
+            status = getattr(exc, "status_code", None)
+            return status in (408, 429, 500, 502, 503, 504)
+        if _OPENAI_RETRY_TYPES and isinstance(exc, _OPENAI_RETRY_TYPES):
+            return True
+        if _OPENAI_STATUS_ERR is not None and isinstance(exc, _OPENAI_STATUS_ERR):
+            status = getattr(exc, "status_code", None)
+            return status in (408, 429, 500, 502, 503, 504)
+        return False
+
+    search_retry = retry(  # type: ignore[assignment]
+        reraise=True,
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception(_is_transient_search_error),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+    )
+except ImportError:  # pragma: no cover - tenacity not installed
+    logger.warning("tenacity not installed; search calls will not retry")
+
+    def search_retry(fn: _F) -> _F:  # type: ignore[no-redef]
+        return fn
+
+try:
     from azure.identity import AzureCliCredential, DefaultAzureCredential
     from azure.search.documents import SearchClient
     from azure.search.documents.models import QueryType, VectorizedQuery
@@ -150,14 +212,25 @@ class AzureAISearchClient:
     # ------------------------------------------------------------------
 
     def _get_credential(self):
+        """Always return a managed-identity / DefaultAzureCredential.
+
+        API key auth (AZURE_SEARCH_API_KEY) is no longer supported by
+        this client. The Azure AI Search service should be deployed
+        with ``disableLocalAuth=true`` and accessed via RBAC.
+        """
         if self.search_key and not self.search_key.startswith("your_"):
-            return AzureKeyCredential(self.search_key)
-        if self.use_managed_identity:
-            try:
-                return AzureCliCredential()
-            except Exception:
-                return DefaultAzureCredential()
-        raise ValueError("No valid credential for Azure AI Search")
+            logger.warning(
+                "AZURE_SEARCH_API_KEY is set but ignored — using managed identity. "
+                "Remove the env var to silence this warning."
+            )
+        if not self.use_managed_identity:
+            logger.warning(
+                "USE_MANAGED_IDENTITY=false is no longer supported; forcing MI."
+            )
+        try:
+            return AzureCliCredential()
+        except Exception:
+            return DefaultAzureCredential()
 
     # ------------------------------------------------------------------
     # Client accessors
@@ -179,23 +252,20 @@ class AzureAISearchClient:
     def _get_openai_client(self):
         if self._openai_client is None and OPENAI_AVAILABLE and self.openai_endpoint:
             if self.openai_key and not self.openai_key.startswith("your_"):
-                self._openai_client = AzureOpenAI(
-                    azure_endpoint=self.openai_endpoint,
-                    api_version=self.openai_api_version,
-                    api_key=self.openai_key,
+                logger.warning(
+                    "AZURE_OPENAI_API_KEY is set but ignored — using managed identity."
                 )
-            else:
-                from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-                token_provider = get_bearer_token_provider(
-                    DefaultAzureCredential(),
-                    "https://cognitiveservices.azure.com/.default",
-                )
-                self._openai_client = AzureOpenAI(
-                    azure_endpoint=self.openai_endpoint,
-                    api_version=self.openai_api_version,
-                    azure_ad_token_provider=token_provider,
-                )
+            token_provider = get_bearer_token_provider(
+                DefaultAzureCredential(),
+                "https://cognitiveservices.azure.com/.default",
+            )
+            self._openai_client = AzureOpenAI(
+                azure_endpoint=self.openai_endpoint,
+                api_version=self.openai_api_version,
+                azure_ad_token_provider=token_provider,
+            )
         return self._openai_client
 
     # ------------------------------------------------------------------
@@ -362,23 +432,33 @@ class AzureAISearchClient:
     # ------------------------------------------------------------------
 
     def generate_embedding(self, text: str) -> list[float] | None:
-        """Generate embedding vector using text-embedding-3-small."""
+        """Generate embedding vector using text-embedding-3-small.
+
+        Wraps the OpenAI call with retry/backoff on transient errors.
+        Returns ``None`` only on non-transient failures (e.g. auth).
+        """
         client = self._get_openai_client()
         if not client:
             return None
-        try:
+
+        @search_retry
+        def _call() -> list[float]:
             response = client.embeddings.create(
                 input=text, model=self.EMBEDDING_MODEL
             )
             return response.data[0].embedding
+
+        try:
+            return _call()
         except Exception as e:
-            logger.warning(f"Embedding generation failed: {e}")
+            logger.warning(f"Embedding generation failed after retries: {e}")
             return None
 
     # ------------------------------------------------------------------
     # Hybrid search
     # ------------------------------------------------------------------
 
+    @search_retry
     def hybrid_search(
         self, user_query: str, embedding: list[float] | None = None, top: int | None = None
     ) -> list[dict[str, Any]]:
@@ -454,6 +534,13 @@ class AzureAISearchClient:
             return hits
 
         except Exception as e:
+            # Re-raise transient azure-core errors so @search_retry can apply
+            # backoff; swallow everything else and return an empty list so the
+            # caller can degrade gracefully.
+            if AZURE_CORE_EXCEPTIONS_AVAILABLE and isinstance(
+                e, (ServiceRequestError, ServiceResponseError, HttpResponseError)
+            ):
+                raise
             logger.error(f"Hybrid search failed: {e}")
             return []
 
@@ -692,6 +779,7 @@ class AzureAISearchClient:
             logger.error("Failed to create MCP project connection: %s", e)
             return False
 
+    @search_retry
     def agentic_retrieve(
         self,
         messages: list[dict[str, str]],

@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-progress
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: Unit tests (offline only)
+        env:
+          PYTHONPATH: src
+        # Live integration tests are excluded; mark them with @pytest.mark.live to skip.
+        run: uv run pytest -m "not live" --maxfail=5 -q
+
+  bicep-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Bicep CLI
+        run: az bicep install
+
+      - name: Build subscription-scope template
+        run: az bicep build --file infra/main.bicep
+
+      - name: Build resource-group-scope template
+        run: az bicep build --file infra/bicep/main.bicep
+
+      - name: Build networking module
+        run: az bicep build --file infra/bicep/modules/networking.bicep

@@ -12,13 +12,24 @@ import logging
 import os
 
 import azure.functions as func
+from pydantic import ValidationError
+
 from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator
+from models import QueryRequest
 
 logger = logging.getLogger(__name__)
 
 app = func.FunctionApp()
 
 orchestrator = FoundryAgentOrchestrator()
+
+
+def _json_response(payload: dict, status: int = 200) -> func.HttpResponse:
+    return func.HttpResponse(
+        json.dumps(payload, default=str),
+        status_code=status,
+        mimetype="application/json",
+    )
 
 
 @app.route(route="ask", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
@@ -33,31 +44,28 @@ async def ask_hr_policy(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
     except ValueError:
-        return func.HttpResponse(
-            json.dumps({"error": "Invalid JSON body"}),
-            status_code=400,
-            mimetype="application/json",
+        return _json_response({"error": "Invalid JSON body"}, status=400)
+
+    try:
+        request_model = QueryRequest.model_validate(body)
+    except ValidationError as e:
+        return _json_response(
+            {"error": "Validation failed", "details": e.errors()}, status=400
         )
 
-    query = body.get("query", "").strip()
+    query = request_model.query.strip()
     if not query:
-        return func.HttpResponse(
-            json.dumps({"error": "Missing 'query' field"}),
-            status_code=400,
-            mimetype="application/json",
-        )
+        return _json_response({"error": "Missing 'query' field"}, status=400)
 
     try:
         results = await orchestrator.process_query_async(query)
-        return func.HttpResponse(
-            json.dumps(results, default=str),
-            status_code=200,
-            mimetype="application/json",
-        )
+        return _json_response(results, status=200)
     except Exception as e:
-        logger.error(f"Orchestrator failed: {e}")
-        return func.HttpResponse(
-            json.dumps({"error": "Internal server error"}),
-            status_code=500,
-            mimetype="application/json",
-        )
+        logger.exception("Orchestrator failed: %s", e)
+        return _json_response({"error": "Internal server error"}, status=500)
+
+
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def health(req: func.HttpRequest) -> func.HttpResponse:
+    """Liveness probe for the Function App."""
+    return _json_response({"status": "ok"})

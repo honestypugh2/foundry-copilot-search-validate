@@ -586,7 +586,7 @@ Each subquery targets the index from a different angle (exact match, keyword com
 
 ### Controlling Subquery Behavior
 
-Set in `config/search_config.json` under `agentic_retrieval`:
+Set in `src/config/search_config.json` under `agentic_retrieval`:
 
 ```json
 {
@@ -723,7 +723,7 @@ Pattern A captures subquery data via a **secondary** `agentic_retrieve()` call a
 ### Empty Subqueries Table
 
 If the subqueries table prints headers but no rows, verify:
-- `config/search_config.json` → `"include_activity": true`
+- `src/config/search_config.json` → `"include_activity": true`
 - `"retrieval_reasoning_effort": "medium"` (not `"minimal"`)
 - The SDK returns snake_case fields: `search_index_arguments`, `elapsed_ms` (not camelCase)
 

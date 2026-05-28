@@ -7,6 +7,6 @@ infra:
   path: ../infra
 services:
   api:
-    project: ./api
+    project: ./src/api
     language: python
     host: function

@@ -1,0 +1,72 @@
+name: deploy
+
+# Deploys infra + Function App via Azure Developer CLI (azd).
+#
+# Required GitHub secrets (configure in repo settings → Secrets and variables → Actions):
+#   AZURE_CLIENT_ID         — Service principal / managed identity client ID with
+#                             federated OIDC credential for this repo + environment.
+#   AZURE_TENANT_ID         — Entra ID tenant.
+#   AZURE_SUBSCRIPTION_ID   — Target subscription.
+#   AZURE_ENV_NAME          — azd environment name (e.g. "prod" or "dev").
+#   AZURE_LOCATION          — Region (e.g. "eastus2").
+#
+# Optional secrets (only needed if enableFunctionAuth=true in main.parameters.json):
+#   AZURE_FUNCTION_AUTH_CLIENT_ID — App registration client ID for the Function.
+#
+# Setup OIDC federated credential (one-time):
+#   az ad app federated-credential create --id <appId> --parameters '{
+#     "name": "gh-deploy-main",
+#     "issuer": "https://token.actions.githubusercontent.com",
+#     "subject": "repo:<owner>/<repo>:ref:refs/heads/main",
+#     "audiences": ["api://AzureADTokenExchange"]
+#   }'
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ENV_NAME: ${{ secrets.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ secrets.AZURE_LOCATION }}
+      AZURE_FUNCTION_AUTH_CLIENT_ID: ${{ secrets.AZURE_FUNCTION_AUTH_CLIENT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install azd
+        uses: Azure/setup-azd@v2
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: azd auth login (federated)
+        run: |
+          azd auth login \
+            --client-id "$AZURE_CLIENT_ID" \
+            --federated-credential-provider github \
+            --tenant-id "$AZURE_TENANT_ID"
+
+      - name: Provision infrastructure
+        run: azd provision --no-prompt
+        env:
+          AZURE_PRINCIPAL_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
+      - name: Deploy Function App
+        run: azd deploy api --no-prompt
