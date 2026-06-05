@@ -42,8 +42,14 @@ from azure.ai.projects.models import MCPTool, PromptAgentDefinition
 from azure.identity.aio import DefaultAzureCredential
 
 from search.azure_ai_search_client import AzureAISearchClient
+from agents.foundry_client import _ensure_foundry_agent
+from observability import enable_tracing
 
 logger = logging.getLogger(__name__)
+
+# Activate Azure Monitor / OpenTelemetry tracing once when this module is
+# loaded so spans flow to App Insights (and thus Foundry portal Tracing).
+enable_tracing()
 
 try:
     from openai import APIConnectionError, APITimeoutError, RateLimitError, APIStatusError
@@ -266,20 +272,20 @@ class FoundryAgentOrchestrator:
             ) as project_client,
             project_client.get_openai_client() as openai_client,
         ):
-            # Create agent with MCP tool
+            # Get-or-create agent with MCP tool. Reusing the existing
+            # version avoids minting a new draft every run, which is what
+            # caused the Foundry portal to prompt "Save the Agent" on every
+            # click.  Set RECREATE_FOUNDRY_AGENTS=true to force a new version
+            # (e.g. after editing instructions).
             mcp_tool = self._build_mcp_tool()
-            agent = await project_client.agents.create_version(
+            agent = await _ensure_foundry_agent(
+                project_client,
                 agent_name="HRPolicyAgent",
                 definition=PromptAgentDefinition(
                     model=self.deployment_name,
                     instructions=self._build_instructions(),
                     tools=[mcp_tool],
                 ),
-            )
-            logger.info(
-                "Single-agent MCP: agent created (name=%s, version=%s)",
-                agent.name,
-                agent.version,
             )
 
             try:

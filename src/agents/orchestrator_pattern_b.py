@@ -62,8 +62,12 @@ from azure.ai.projects.models import MCPTool, PromptAgentDefinition, FunctionToo
 from azure.identity.aio import DefaultAzureCredential
 
 from search.azure_ai_search_client import AzureAISearchClient
+from agents.foundry_client import _ensure_foundry_agent
+from observability import enable_tracing
 
 logger = logging.getLogger(__name__)
+
+enable_tracing()
 
 # Load config
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "search_config.json"
@@ -402,17 +406,14 @@ class PatternBOrchestrator:
                 "- Use markdown formatting for clarity\n"
                 "- Present exact values — do not paraphrase paths\n"
             )
-            agent = await project_client.agents.create_version(
-                agent_name="HRPolicyAgentB",
+            agent = await _ensure_foundry_agent(
+                project_client,
+                agent_name="HRPolicyAgentB-FileLocation",
                 definition=PromptAgentDefinition(
                     model=self.deployment_name,
                     instructions=formatting_instructions,
                 ),
-            )
-            logger.info(
-                "Pattern B (file-location): agent created (name=%s, version=%s)",
-                agent.name,
-                agent.version,
+                role_label="Pattern B (file-location)",
             )
 
             try:
@@ -503,18 +504,15 @@ class PatternBOrchestrator:
             # Create agent with MCP tool only (content queries)
             mcp_tool = self._build_mcp_tool()
 
-            agent = await project_client.agents.create_version(
+            agent = await _ensure_foundry_agent(
+                project_client,
                 agent_name="HRPolicyAgentB",
                 definition=PromptAgentDefinition(
                     model=self.deployment_name,
                     instructions=self._build_instructions(),
                     tools=[mcp_tool],
                 ),
-            )
-            logger.info(
-                "Pattern B: agent created (name=%s, version=%s)",
-                agent.name,
-                agent.version,
+                role_label="Pattern B",
             )
 
             try:

@@ -126,6 +126,9 @@
         "include_reference_source_data": true,
         "always_query_source": true,
         "include_activity": true,
+        "reranker_threshold": 2.5,
+        "max_runtime_in_seconds": 30,
+        "max_output_size_in_tokens": 6000,
         "mcp": {
             "project_connection_name": "hr-knowledge-mcp-connection",
             "api_version": "2025-11-01-Preview"
@@ -136,9 +139,9 @@
         "description": "Azure Blob Storage container for HR policy documents"
     },
     "foundry_agent": {
-        "model": "gpt-5",
+        "model": "gpt-4.1-mini",
         "output_mode": "answerSynthesis",
-        "retrieval_reasoning": "medium",
+        "retrieval_reasoning": "minimal",
         "retrieval_instructions": "Use only the connected knowledge sources. Do not answer from general knowledge.\nPrimary objective: maximize recall of HR-policy-related evidence. Retrieve documents that are directly relevant to the user's query and also documents that mention the queried policy number, topic, leave type, dress code, IT policy, hiring procedure, or operational matter indirectly.\nAlways search across all connected knowledge sources.\nExpand search broadly using likely HR policy variants, policy-number variants, document-type variants, and common employee terminology where relevant.\nDo not suppress weak matches. Keep potentially relevant results so the answering layer can label them appropriately.\nPrefer retrieving the actual source documents when available, not only documents that reference them. If filenames or exact document titles appear in retrieved content, prioritize those exact files as well.\nPreserve exact filenames, source paths, and metadata exactly as stored when available. Do not invent filenames, paths, or document identifiers.\nIf evidence is not found in the connected knowledge sources, say so clearly.\nCRITICAL: Always include metadata_storage_path, blob_url, and metadata_storage_name in the source_data of every reference. These fields contain the file's storage location and must be passed through to the response layer.",
         "answer_instructions": "Provide grounded evidence only from the connected knowledge sources.\nDo not use general knowledge. Do not fabricate filenames, paths, or document details.\nPreserve exact filenames exactly as retrieved.\nTreat this distinction as critical:\n- ✅ retrieved = the file itself was directly returned\n- ⚠️ referenced only = the filename is only mentioned inside retrieved content\n- what was found\n- where it was found\n- whether the file was directly retrieved or only referenced\nIf a source path is available, preserve it exactly as retrieved.\nIf the requested evidence was not directly found, say so clearly.\nPrefer concise, practical answers that help the user identify the relevant HR policy, citing the policy number (e.g., Policy 51350) and title.\n\nCRITICAL — FILE LOCATION AND PATH QUERIES:\nWhen the user asks where a document is, asks for a file path, link, URL, or storage location:\n1. Extract the metadata_storage_path value from the source_data of each reference returned by the knowledge base.\n2. Extract the blob_url value from the source_data.\n3. Return these values EXACTLY as they appear — do NOT say 'no path was provided' or 'metadata_storage_path not available' when the field exists in source_data.\n4. Format the answer clearly: 'The file is located at: [exact metadata_storage_path]'\n5. If blob_url differs from metadata_storage_path, include both.\n6. Also include metadata_storage_name (the filename) in your response."
     }

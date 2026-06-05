@@ -354,9 +354,14 @@ https://ai.azure.com
    - Model: `gpt-4.1`
    - Version history (one version per deployment)
 
-> **Note**: The agent is registered via `AIProjectClient.agents.create_version()`
-> during `SequentialWorkflowOrchestrator._create_foundry_agent()`. If registration
-> fails (401), the pipeline still works — it just won't appear in the portal.
+> **Note**: The agent is registered via `_ensure_foundry_agent()` in
+> [`src/agents/foundry_client.py`](../src/agents/foundry_client.py), which
+> wraps `AIProjectClient.agents.get()` + `agents.create_version()`. The
+> default behaviour is **get-or-create**: an existing agent version is
+> reused so the portal does not flag every run as a draft. Set
+> `RECREATE_FOUNDRY_AGENTS=true` to force a new version on every call.
+> If registration fails (401), the pipeline still works — it just won't
+> appear in the portal.
 
 ### 3. View Tracing & Telemetry
 
@@ -367,9 +372,24 @@ https://ai.azure.com
    - Latency per model invocation
    - Full request/response payloads
 
-> **Prerequisite**: Tracing requires Application Insights connected to
-> your Foundry project. Set `AZURE_APPLICATION_INSIGHTS_CONNECTION_STRING`
-> in your `.env` file.
+> **Prerequisites for the Tracing tab to populate**:
+>
+> 1. **App Insights connection on the Foundry project** — a
+>    `Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01`
+>    resource of `category: 'AppInsights'`. The default lab Bicep
+>    ([`infra/bicep/main.bicep`](../infra/bicep/main.bicep)) creates one.
+>    For an existing project, deploy
+>    [`infra/bicep/connect-appinsights.bicep`](../infra/bicep/connect-appinsights.bicep).
+> 2. **`APPLICATIONINSIGHTS_CONNECTION_STRING`** in `.env` — the runtime
+>    needs this to ship spans. The orchestrators call `enable_tracing()`
+>    from [`src/observability.py`](../src/observability.py) at module
+>    load, which wires up `azure-monitor-opentelemetry`.
+> 3. **`AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true`** — set as a default
+>    by `enable_tracing()`. **Required** for the Azure AI Projects SDK to
+>    emit agent / tool spans. Without it the tab stays empty even when
+>    everything else is wired up.
+> 4. **Install the OTel dep with prereleases enabled**:
+>    `uv pip install --prerelease=allow 'azure-monitor-opentelemetry>=1.6.0,<2'`.
 
 ### 4. Understand the Workflow Event Stream
 

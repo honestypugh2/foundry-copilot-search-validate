@@ -89,12 +89,12 @@ class TestAskEndpoint:
         mock_orch = MagicMock()
         mock_orch.process_query_async = AsyncMock(return_value=MOCK_ORCHESTRATOR_RESULT)
 
-        from api.function_app import ask_hr_policy
+        from function_app import ask_hr_policy
 
         # Patch the module-level orchestrator
-        import api.function_app as app_module
-        original = app_module.orchestrator
-        app_module.orchestrator = mock_orch
+        import function_app as app_module
+        original = app_module._orchestrator
+        app_module._orchestrator = mock_orch
 
         try:
             req = _make_http_request({"query": "What is the PTO policy?"})
@@ -110,12 +110,12 @@ class TestAskEndpoint:
             test_logger.info("  status=%s  grounded=%s", body["status"], body["is_grounded"])
             test_logger.info("  ✓ successful query OK")
         finally:
-            app_module.orchestrator = original
+            app_module._orchestrator = original
 
     @pytest.mark.asyncio
     async def test_missing_query(self, test_logger):
         test_logger.info("─── /api/ask: missing query ───")
-        from api.function_app import ask_hr_policy
+        from function_app import ask_hr_policy
 
         req = _make_http_request({"query": ""})
         resp = await ask_hr_policy(req)
@@ -129,7 +129,7 @@ class TestAskEndpoint:
     @pytest.mark.asyncio
     async def test_missing_query_field(self, test_logger):
         test_logger.info("─── /api/ask: missing query field ───")
-        from api.function_app import ask_hr_policy
+        from function_app import ask_hr_policy
 
         req = _make_http_request({"message": "hello"})
         resp = await ask_hr_policy(req)
@@ -140,7 +140,7 @@ class TestAskEndpoint:
     @pytest.mark.asyncio
     async def test_invalid_json(self, test_logger):
         test_logger.info("─── /api/ask: invalid JSON ───")
-        from api.function_app import ask_hr_policy
+        from function_app import ask_hr_policy
 
         req = _make_http_request(None)
         resp = await ask_hr_policy(req)
@@ -158,11 +158,11 @@ class TestAskEndpoint:
             side_effect=RuntimeError("Search unavailable")
         )
 
-        from api.function_app import ask_hr_policy
-        import api.function_app as app_module
+        from function_app import ask_hr_policy
+        import function_app as app_module
 
-        original = app_module.orchestrator
-        app_module.orchestrator = mock_orch
+        original = app_module._orchestrator
+        app_module._orchestrator = mock_orch
 
         try:
             req = _make_http_request({"query": "test"})
@@ -174,7 +174,7 @@ class TestAskEndpoint:
             test_logger.info("  status_code=%d", resp.status_code)
             test_logger.info("  ✓ orchestrator failure → 500")
         finally:
-            app_module.orchestrator = original
+            app_module._orchestrator = original
 
 
 # ---------------------------------------------------------------------------

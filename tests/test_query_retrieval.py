@@ -60,6 +60,7 @@ class QueryTestCase:
     expected_file: str             # substring that MUST appear in fileName
     description: str               # human-readable label
     expected_metadata: dict = field(default_factory=dict)  # expected metadata fields
+    query_id: int = 0              # 1-based ID from QUERY_EXPECTATIONS (for --query_id filter)
     # Filled after execution
     actual_matches: list[dict] = field(default_factory=list)
     validated_sources: list[dict] = field(default_factory=list)
@@ -82,6 +83,7 @@ TEST_CASES: list[QueryTestCase] = [
         expected_file=qe.expected_file,
         description=qe.description,
         expected_metadata=qe.expected_metadata,
+        query_id=qe.query_id,
     )
     for qe in QUERY_EXPECTATIONS
 ]
@@ -221,8 +223,10 @@ def _evaluate(tc: QueryTestCase) -> None:
 # Run all test cases
 # ---------------------------------------------------------------------------
 
-def run_tests(mock: bool) -> list[QueryTestCase]:
+def run_tests(mock: bool, cases: list[QueryTestCase] | None = None) -> list[QueryTestCase]:
     """Execute every test case and return populated results."""
+
+    cases = cases if cases is not None else TEST_CASES
 
     if not mock:
         from agents.retrieval_agent import RetrievalAgent
@@ -237,7 +241,7 @@ def run_tests(mock: bool) -> list[QueryTestCase]:
 
     results: list[QueryTestCase] = []
 
-    for tc in TEST_CASES:
+    for tc in cases:
         logger.info("─" * 60)
         logger.info("QUERY: %s", tc.query)
         logger.info("  expected_policy=%s  expected_file=%s",
@@ -392,11 +396,31 @@ def main():
         "--mock", action="store_true",
         help="Run in mock mode (no Azure credentials needed)",
     )
+    parser.add_argument(
+        "--query_id", type=int, default=None,
+        help="Run a single query by its query_id from test_queries.QUERY_EXPECTATIONS",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="Run only the first N queries (ignored if --query_id is set)",
+    )
     args = parser.parse_args()
+
+    # Filter test cases
+    if args.query_id is not None:
+        cases = [tc for tc in TEST_CASES if tc.query_id == args.query_id]
+        if not cases:
+            valid_ids = sorted(tc.query_id for tc in TEST_CASES if tc.query_id)
+            logger.error("--query_id=%d not found. Valid IDs: %s", args.query_id, valid_ids)
+            sys.exit(1)
+    elif args.limit:
+        cases = TEST_CASES[:args.limit]
+    else:
+        cases = TEST_CASES
 
     logger.info("=" * 80)
     logger.info("HR Policy Knowledge Lab – Query Retrieval Test")
-    logger.info("Mode: %s  |  Test cases: %d", "MOCK" if args.mock else "LIVE", len(TEST_CASES))
+    logger.info("Mode: %s  |  Test cases: %d", "MOCK" if args.mock else "LIVE", len(cases))
     logger.info("=" * 80)
 
     # Load .env if present
@@ -409,7 +433,7 @@ def main():
     except ImportError:
         pass
 
-    results = run_tests(args.mock)
+    results = run_tests(args.mock, cases=cases)
     print_summary(results)
 
     failed = sum(1 for r in results if not r.passed)

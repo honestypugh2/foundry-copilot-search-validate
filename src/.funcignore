@@ -1,0 +1,29 @@
+# Functions deployment ignore — keep zip lean for Flex Consumption.
+.git
+.github
+.vscode
+.venv
+.venv-*
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.mypy_cache
+local.settings.json
+
+# Test / docs / data are NOT part of the runtime
+tests/
+docs/
+notebooks/
+images/
+data/
+logs/
+evals/
+scripts/
+infra/
+copilot/
+
+# Preview Agent Framework path is NOT shipped with the GA function package.
+agents_af/

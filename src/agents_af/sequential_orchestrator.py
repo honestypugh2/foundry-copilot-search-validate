@@ -40,8 +40,13 @@ from agents_af.retrieval_agent import RetrievalAgent
 from agents_af.source_validator_agent import SourceValidatorAgent
 from agents_af.reference_validator_agent import ReferenceValidatorAgent
 from agents_af.answer_synthesis_agent import AnswerSynthesisAgent
+from observability import enable_tracing
 
 logger = logging.getLogger(__name__)
+
+# Activate Azure Monitor / OpenTelemetry tracing once when this module is
+# loaded so spans flow to App Insights (and thus Foundry portal Tracing).
+enable_tracing()
 
 # Agent name used for both AF wrapper and Foundry portal registration
 FOUNDRY_AGENT_NAME = "hr-answer-synthesis"

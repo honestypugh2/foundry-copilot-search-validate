@@ -4,9 +4,9 @@ metadata:
   template: hr-policy-kb-lab
 infra:
   provider: bicep
-  path: ../infra
+  path: infra
 services:
   api:
-    project: ./src/api
+    project: ./src
     language: python
     host: function

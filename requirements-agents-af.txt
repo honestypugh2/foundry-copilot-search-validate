@@ -1,0 +1,42 @@
+# PREVIEW / TESTING ONLY — Microsoft Agent Framework path used by src/agents_af/.
+#
+# This file pins preview (rc/b) packages and is INCOMPATIBLE with the default
+# GA dependency set in requirements.txt because agent-framework 1.7
+# transitively pins azure-search-documents==11.7.0b2 via
+# agent-framework-azure-ai-search, which conflicts with the GA
+# azure-search-documents>=12.0.0 used by the default Foundry + MCP path.
+#
+# Install in a SEPARATE virtual environment (do NOT mix with the GA env):
+#
+#   uv venv .venv-agents-af --python 3.13
+#   source .venv-agents-af/bin/activate
+#   uv pip install -r requirements-agents-af.txt --prerelease=allow
+#
+# Then set ORCHESTRATOR_PATTERN=AF (see src/agents_af/README.md) before running.
+#
+# DO NOT USE IN PRODUCTION. The default Copilot Studio → Foundry Agent + MCP
+# pattern in requirements.txt uses GA-only packages and is the supported path.
+
+# --- Preview Agent Framework ---
+agent-framework==1.7.0
+agent-framework-azure-ai==1.0.0rc6
+agent-framework-foundry==1.7.0
+agent-framework-orchestrations==1.0.0rc2
+azure-ai-inference==1.0.0b9
+
+# --- Preview Azure AI Search SDK (transitively required by agent-framework) ---
+azure-search-documents==11.7.0b2
+
+# --- Shared GA runtime deps (kept compatible with the preview pins) ---
+azure-functions==2.1.0
+azure-identity>=1.25.3,<1.26
+azure-ai-projects==2.2.0
+azure-ai-contentunderstanding>=1.1.0,<1.2
+azure-monitor-opentelemetry>=1.6.0,<2
+azure-storage-blob>=12.29.0,<13
+nest-asyncio>=1.6.0
+openai>=2.41.0
+pydantic>=2.13.4,<3
+pypdf>=6.12.2
+python-dotenv>=1.2.2
+python-docx>=1.2.0

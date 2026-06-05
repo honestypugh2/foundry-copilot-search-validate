@@ -1,5 +1,12 @@
 # Foundry Agent Architecture — MCP Agentic Retrieval
 
+> ⚠️ **Development reference only.** Production deployments must follow the
+> [Azure Well-Architected Framework](https://learn.microsoft.com/azure/well-architected/)
+> and Microsoft best practices. This is the default, GA-only pattern of the
+> repo (`azure-ai-projects` 2.2.0 + `azure-search-documents` 12.0.0). The
+> preview Agent Framework alternative under
+> [`src/agents_af/`](../src/agents_af/README.md) is testing-only.
+
 ## Overview
 
 This document describes the Foundry Agent orchestrator architecture for HR policy
@@ -62,24 +69,33 @@ the **infrastructure level**, making a separate validation step redundant.
 
 ```
 User Query → Client-Side Query Classification
-    ├─ Content question → Foundry Agent (MCPTool only) → Answer with Citations
-    └─ File-location question → file_metadata_lookup (direct search) → Agent formats
+    ├─ Content question → HRPolicyAgentB (MCPTool only) → Answer with Citations
+    └─ File-location question → file_metadata_lookup (direct search)
+                                  → HRPolicyAgentB-FileLocation (no tools, formatting only)
 ```
 
 Pattern B uses **client-side query classification** to route queries to the optimal path.
 A regex-based classifier detects file-location intent ("where is", "file path", "blob URL",
 "stored", "located", etc.) and routes accordingly:
 
-- **Content questions** ("What does Policy 51350 say?") → Foundry Agent with MCPTool only
-  (platform handles MCP natively, same as Pattern A — full citations)
+- **Content questions** ("What does Policy 51350 say?") → `HRPolicyAgentB` Foundry Agent
+  with MCPTool only (platform handles MCP natively, same as Pattern A — full citations)
 - **File-location questions** ("Where is the PTO policy stored?") → `file_metadata_lookup`
-  called directly (bypasses MCP entirely), then the agent formats the deterministic results
+  called directly (bypasses MCP entirely), then the no-tools `HRPolicyAgentB-FileLocation`
+  agent formats the deterministic results
 
 **Key implementation detail:** The Foundry platform ignores `tool_choice` overrides when
 MCPTool is registered — it always routes to `knowledge_base_retrieve` regardless of
 instructions. Pattern B solves this with client-side classification: file-location queries
 bypass the agent's tool routing entirely, calling `hybrid_search()` directly for
-deterministic metadata, then passing results to the agent (with no tools) for formatting.
+deterministic metadata, then passing results to a separate no-tools agent for formatting.
+
+**Two stable agent names instead of one** (`HRPolicyAgentB` for content, plus
+`HRPolicyAgentB-FileLocation` for formatting) prevent definition churn. Both
+pipelines call `_ensure_foundry_agent()` ([`src/agents/foundry_client.py`](../src/agents/foundry_client.py))
+which performs **get-or-create** — the existing version is reused so the
+portal stops prompting "Save the Agent" between runs. Set
+`RECREATE_FOUNDRY_AGENTS=true` to force a new version on every call.
 
 **Why Pattern B for file-location queries:**
 

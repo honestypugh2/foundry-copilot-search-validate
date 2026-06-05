@@ -31,7 +31,7 @@ param aiServicesId string
 param keyVaultId string
 
 // ---------- VNet ----------
-resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2024-07-01' = {
   name: 'vnet-${resourceToken}'
   location: location
   properties: {
@@ -89,7 +89,7 @@ resource zoneLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-0
 }]
 
 // ---------- Private Endpoints ----------
-resource peSearch 'Microsoft.Network/privateEndpoints@2024-01-01' = {
+resource peSearch 'Microsoft.Network/privateEndpoints@2024-07-01' = {
   name: 'pe-search-${resourceToken}'
   location: location
   properties: {
@@ -106,7 +106,7 @@ resource peSearch 'Microsoft.Network/privateEndpoints@2024-01-01' = {
   }
 }
 
-resource peSearchDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-01-01' = {
+resource peSearchDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01' = {
   parent: peSearch
   name: 'default'
   properties: {
@@ -116,7 +116,7 @@ resource peSearchDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@20
   }
 }
 
-resource peStorage 'Microsoft.Network/privateEndpoints@2024-01-01' = {
+resource peStorage 'Microsoft.Network/privateEndpoints@2024-07-01' = {
   name: 'pe-blob-${resourceToken}'
   location: location
   properties: {
@@ -133,7 +133,7 @@ resource peStorage 'Microsoft.Network/privateEndpoints@2024-01-01' = {
   }
 }
 
-resource peStorageDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-01-01' = {
+resource peStorageDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01' = {
   parent: peStorage
   name: 'default'
   properties: {
@@ -143,7 +143,7 @@ resource peStorageDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2
   }
 }
 
-resource peAi 'Microsoft.Network/privateEndpoints@2024-01-01' = {
+resource peAi 'Microsoft.Network/privateEndpoints@2024-07-01' = {
   name: 'pe-ai-${resourceToken}'
   location: location
   properties: {
@@ -160,7 +160,7 @@ resource peAi 'Microsoft.Network/privateEndpoints@2024-01-01' = {
   }
 }
 
-resource peAiDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-01-01' = {
+resource peAiDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01' = {
   parent: peAi
   name: 'default'
   properties: {
@@ -171,7 +171,7 @@ resource peAiDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-0
   }
 }
 
-resource peKv 'Microsoft.Network/privateEndpoints@2024-01-01' = {
+resource peKv 'Microsoft.Network/privateEndpoints@2024-07-01' = {
   name: 'pe-kv-${resourceToken}'
   location: location
   properties: {
@@ -188,7 +188,7 @@ resource peKv 'Microsoft.Network/privateEndpoints@2024-01-01' = {
   }
 }
 
-resource peKvDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-01-01' = {
+resource peKvDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01' = {
   parent: peKv
   name: 'default'
   properties: {

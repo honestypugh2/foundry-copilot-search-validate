@@ -14,14 +14,29 @@ import os
 import azure.functions as func
 from pydantic import ValidationError
 
-from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator
 from models import QueryRequest
 
 logger = logging.getLogger(__name__)
 
 app = func.FunctionApp()
 
-orchestrator = FoundryAgentOrchestrator()
+# Lazy-init the orchestrator on first request. Doing this at module scope
+# would make ANY init failure (missing env var, auth, network) prevent the
+# Functions host from registering routes, surfacing as
+# "We were not able to load some functions in the list due to errors" in the
+# portal with no usable diagnostics.
+_orchestrator = None
+
+
+def _get_orchestrator():
+    global _orchestrator
+    if _orchestrator is None:
+        # Imported lazily so an import-time failure inside the agent stack
+        # surfaces as a clear 500 with a logged stack trace rather than
+        # killing function registration.
+        from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator
+        _orchestrator = FoundryAgentOrchestrator()
+    return _orchestrator
 
 
 def _json_response(payload: dict, status: int = 200) -> func.HttpResponse:
@@ -58,6 +73,7 @@ async def ask_hr_policy(req: func.HttpRequest) -> func.HttpResponse:
         return _json_response({"error": "Missing 'query' field"}, status=400)
 
     try:
+        orchestrator = _get_orchestrator()
         results = await orchestrator.process_query_async(query)
         return _json_response(results, status=200)
     except Exception as e:

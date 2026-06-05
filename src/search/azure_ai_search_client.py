@@ -87,34 +87,32 @@ except ImportError:
     SEARCH_SDK_AVAILABLE = False
     logger.warning("azure-search-documents not installed")
 
+# Knowledge Source / Knowledge Base management uses direct REST against the
+# GA agentic-retrieval surface (api-version 2026-04-01). The GA Python SDK
+# (azure-search-documents 12.0.0) still ships preview-era models on the
+# request types (e.g. KnowledgeBaseRetrievalRequest.messages was removed),
+# so we call REST directly here. The SDK is still used for index creation
+# and runtime hybrid search via SearchIndexClient/SearchClient.
 try:
-    from azure.search.documents.indexes import SearchIndexClient
-    from azure.search.documents.indexes.models import (
-        AzureOpenAIVectorizerParameters,
-        KnowledgeBase,
-        KnowledgeBaseAzureOpenAIModel,
-        KnowledgeRetrievalLowReasoningEffort,
-        KnowledgeRetrievalMediumReasoningEffort,
-        KnowledgeRetrievalMinimalReasoningEffort,
-        KnowledgeRetrievalOutputMode,
-        KnowledgeSourceReference,
-        SearchIndexFieldReference,
-        SearchIndexKnowledgeSource,
-        SearchIndexKnowledgeSourceParameters,
-    )
-    from azure.search.documents.knowledgebases import KnowledgeBaseRetrievalClient
-    from azure.search.documents.knowledgebases.models import (
-        KnowledgeBaseMessage,
-        KnowledgeBaseMessageTextContent,
-        KnowledgeBaseRetrievalRequest,
-        KnowledgeRetrievalLowReasoningEffort,
-        KnowledgeRetrievalMediumReasoningEffort,
-        SearchIndexKnowledgeSourceParams,
-    )
+    import requests
+    from azure.identity import get_bearer_token_provider
+    from azure.search.documents.indexes import SearchIndexClient  # noqa: F401
     AGENTIC_RETRIEVAL_AVAILABLE = True
 except ImportError:
     AGENTIC_RETRIEVAL_AVAILABLE = False
-    logger.info("Agentic retrieval classes not available in installed SDK")
+    logger.info(
+        "requests / azure-identity / azure-search-documents not installed; "
+        "agentic retrieval REST helpers disabled"
+    )
+
+# GA agentic-retrieval REST contract (api-version 2026-04-01) does NOT
+# accept retrievalReasoningEffort, output_mode, answer_instructions,
+# retrieval_instructions, or message history. Those preview-only knobs are
+# expressed on the calling Foundry agent instead. We keep these constants
+# documented here as the contract boundary.
+KB_REST_API_VERSION = "2026-04-01"
+KB_REST_TIMEOUT_SECONDS = 60
+SEARCH_DATA_PLANE_SCOPE = "https://search.azure.com/.default"
 
 try:
     from openai import AzureOpenAI
@@ -548,10 +546,25 @@ class AzureAISearchClient:
     # Agentic Retrieval – Knowledge Source & Knowledge Base
     # ------------------------------------------------------------------
 
+    def _get_search_bearer_token(self) -> str:
+        """Return an AAD bearer token for the Azure AI Search data plane."""
+        token_provider = get_bearer_token_provider(
+            self._get_credential(), SEARCH_DATA_PLANE_SCOPE
+        )
+        return token_provider()
+
     def create_knowledge_source(self) -> bool:
-        """Create or update the knowledge source pointing at hr_lab_index."""
+        """Create or update the searchIndex knowledge source via REST 2026-04-01.
+
+        Preserves the agentic-retrieval components from the beta version:
+        - kind: ``searchIndex`` (references an existing index)
+        - ``searchIndexName`` (target index)
+        - ``sourceDataFields`` (fields surfaced in references)
+        - ``searchFields`` (fields used for retrieval)
+        - ``semanticConfigurationName`` (semantic ranker)
+        """
         if not AGENTIC_RETRIEVAL_AVAILABLE:
-            logger.error("Agentic retrieval SDK classes not available")
+            logger.error("Agentic retrieval REST helpers unavailable (missing deps)")
             return False
 
         if not self.search_endpoint:
@@ -570,43 +583,69 @@ class AzureAISearchClient:
             "semantic_configuration_name",
             _SEARCH_CONFIG.get("semantic_configuration", ""),
         )
+        description = _AGENTIC_CONFIG.get(
+            "knowledge_source_description",
+            "Knowledge source for HR policy documents",
+        )
+
+        body: dict[str, Any] = {
+            "name": ks_name,
+            "description": description,
+            "kind": "searchIndex",
+            "searchIndexParameters": {
+                "searchIndexName": self.index_name,
+                "sourceDataFields": [{"name": f} for f in source_fields],
+                "searchFields": [{"name": f} for f in search_fields],
+            },
+        }
+        if semantic_config:
+            body["searchIndexParameters"]["semanticConfigurationName"] = semantic_config
+
+        url = (
+            f"{self.search_endpoint.rstrip('/')}/knowledgesources/{ks_name}"
+            f"?api-version={KB_REST_API_VERSION}"
+        )
 
         try:
-            index_client = SearchIndexClient(
-                endpoint=self.search_endpoint,
-                credential=self._get_credential(),
+            token = self._get_search_bearer_token()
+            response = requests.put(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=KB_REST_TIMEOUT_SECONDS,
             )
-
-            ks = SearchIndexKnowledgeSource(
-                name=ks_name,
-                description=_AGENTIC_CONFIG.get(
-                    "knowledge_source_description",
-                    "Knowledge source for HR policy documents",
-                ),
-                search_index_parameters=SearchIndexKnowledgeSourceParameters(
-                    search_index_name=self.index_name,
-                    source_data_fields=[
-                        SearchIndexFieldReference(name=f) for f in source_fields
-                    ],
-                    search_fields=[
-                        SearchIndexFieldReference(name=f) for f in search_fields
-                    ],
-                    semantic_configuration_name=semantic_config or None,
-                ),
-            )
-
-            index_client.create_or_update_knowledge_source(knowledge_source=ks)
-            logger.info("Knowledge source '%s' created/updated", ks_name)
+            if response.status_code >= 400:
+                logger.error(
+                    "Knowledge source PUT failed (%s): %s",
+                    response.status_code, response.text,
+                )
+                return False
+            logger.info("Knowledge source '%s' created/updated via REST %s",
+                        ks_name, KB_REST_API_VERSION)
             return True
-
         except Exception as e:
             logger.error("Failed to create knowledge source: %s", e)
             return False
 
     def create_knowledge_base(self) -> bool:
-        """Create or update the knowledge base with LLM config and answer synthesis."""
+        """Create or update the knowledge base via REST 2026-04-01 (GA).
+
+        GA contract drops preview-era ``answer_instructions``,
+        ``retrieval_instructions``, ``output_mode``, and the preview
+        reasoning-effort knobs from the request body (those move onto
+        the calling Foundry agent's system prompt).
+
+        ``models`` is REQUIRED whenever the Knowledge Base / MCP
+        transport will use any reasoning effort above ``Minimal``. The
+        MCP transport defaults to a non-Minimal effort, so we always
+        include the model. The model deployment defaults to
+        ``gpt-4.1-mini`` (overridable via ``AZURE_OPENAI_GPT_DEPLOYMENT``).
+        """
         if not AGENTIC_RETRIEVAL_AVAILABLE:
-            logger.error("Agentic retrieval SDK classes not available")
+            logger.error("Agentic retrieval REST helpers unavailable (missing deps)")
             return False
 
         if not self.search_endpoint:
@@ -615,91 +654,73 @@ class AzureAISearchClient:
 
         kb_name = _AGENTIC_CONFIG.get("knowledge_base_name", "hr-knowledge-base")
         ks_name = _AGENTIC_CONFIG.get("knowledge_source_name", "hr-knowledge-source")
-        output_mode_str = _AGENTIC_CONFIG.get("output_mode", "ANSWER_SYNTHESIS")
+        description = _AGENTIC_CONFIG.get(
+            "knowledge_base_description",
+            "HR policy knowledge base for agentic retrieval",
+        )
 
+        # Model for the KB itself (required by MCP for non-Minimal reasoning).
+        # Default deployment is gpt-4.1-mini; AZURE_OPENAI_GPT_DEPLOYMENT
+        # overrides. The Foundry agent's own model (used for synthesis) is
+        # controlled separately via AZURE_AI_MODEL_DEPLOYMENT_NAME.
         aoai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-        # Strip trailing path segments — resource_url needs just the base URL
         if "/openai" in aoai_endpoint:
             aoai_endpoint = aoai_endpoint.split("/openai")[0]
         gpt_deployment = os.getenv(
             "AZURE_OPENAI_GPT_DEPLOYMENT",
-            os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1"),
+            os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1-mini"),
         )
-        gpt_model = os.getenv("AZURE_OPENAI_GPT_MODEL", "gpt-4.1")
-        answer_instructions = _FOUNDRY_AGENT_CONFIG.get("answer_instructions", "")
-        retrieval_instructions = _FOUNDRY_AGENT_CONFIG.get("retrieval_instructions", "")
+        gpt_model = os.getenv("AZURE_OPENAI_GPT_MODEL", gpt_deployment)
 
-        # Inject mandatory file-location instruction into answer_instructions
-        # so the KB's internal LLM preserves metadata_storage_path in answers
-        location_instruction = (
-            "\nCRITICAL: When the user asks for a file location, path, URL, or "
-            "where a document is stored, you MUST include the exact "
-            "metadata_storage_path and blob_url values from the source data "
-            "in your response. Never say the path was not provided if it "
-            "exists in the source_data fields."
-        )
-        if answer_instructions and "metadata_storage_path" not in answer_instructions:
-            answer_instructions += location_instruction
-        elif not answer_instructions:
-            answer_instructions = location_instruction.strip()
-
-        # Resolve reasoning effort from config
-        reasoning_effort_str = _AGENTIC_CONFIG.get(
-            "retrieval_reasoning_effort",
-            _FOUNDRY_AGENT_CONFIG.get("retrieval_reasoning", "medium"),
-        )
-        reasoning_effort_map = {
-            "low": KnowledgeRetrievalLowReasoningEffort,
-            "medium": KnowledgeRetrievalMediumReasoningEffort,
-            "minimal": KnowledgeRetrievalMinimalReasoningEffort,
+        body = {
+            "name": kb_name,
+            "description": description,
+            "knowledgeSources": [{"name": ks_name}],
+            "models": [
+                {
+                    "kind": "azureOpenAI",
+                    "azureOpenAIParameters": {
+                        "resourceUri": aoai_endpoint,
+                        "deploymentId": gpt_deployment,
+                        "modelName": gpt_model,
+                    },
+                }
+            ],
         }
-        reasoning_effort_cls = reasoning_effort_map.get(
-            reasoning_effort_str.lower(), KnowledgeRetrievalMediumReasoningEffort
+
+        url = (
+            f"{self.search_endpoint.rstrip('/')}/knowledgebases/{kb_name}"
+            f"?api-version={KB_REST_API_VERSION}"
         )
-        reasoning_effort = reasoning_effort_cls()
 
         try:
-            index_client = SearchIndexClient(
-                endpoint=self.search_endpoint,
-                credential=self._get_credential(),
+            token = self._get_search_bearer_token()
+            response = requests.put(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=KB_REST_TIMEOUT_SECONDS,
+            )
+            if response.status_code >= 400:
+                logger.error(
+                    "Knowledge base PUT failed (%s): %s",
+                    response.status_code, response.text,
+                )
+                return False
+            logger.info(
+                "Knowledge base '%s' created/updated via REST %s (model=%s)",
+                kb_name, KB_REST_API_VERSION, gpt_deployment,
             )
 
-            aoai_params = AzureOpenAIVectorizerParameters(
-                resource_url=aoai_endpoint,
-                deployment_name=gpt_deployment,
-                model_name=gpt_model,
-            )
-
-            output_mode = (
-                KnowledgeRetrievalOutputMode.EXTRACTIVE_DATA
-                if output_mode_str.upper() in ("EXTRACTIVE_DATA", "EXTRACTIVE")
-                else KnowledgeRetrievalOutputMode.ANSWER_SYNTHESIS
-            )
-
-            knowledge_base = KnowledgeBase(
-                name=kb_name,
-                models=[
-                    KnowledgeBaseAzureOpenAIModel(
-                        azure_open_ai_parameters=aoai_params,
-                    )
-                ],  # type: ignore[arg-type]
-                knowledge_sources=[
-                    KnowledgeSourceReference(name=ks_name),
-                ],
-                output_mode=output_mode,
-                retrieval_reasoning_effort=reasoning_effort,
-                retrieval_instructions=retrieval_instructions,
-                answer_instructions=answer_instructions,
-            )
-
-            index_client.create_or_update_knowledge_base(knowledge_base)
-            logger.info("Knowledge base '%s' created/updated", kb_name)
-
-            # Build and store MCP endpoint for agent integration
+            # MCP endpoint remains on its preview api-version (the MCP
+            # transport is separate from the KB management api-version).
             mcp_cfg = _AGENTIC_CONFIG.get("mcp", {})
             api_version = mcp_cfg.get("api_version", "2025-11-01-Preview")
             self.mcp_endpoint = (
-                f"{self.search_endpoint}/knowledgebases/{kb_name}"
+                f"{self.search_endpoint.rstrip('/')}/knowledgebases/{kb_name}"
                 f"/mcp?api-version={api_version}"
             )
             logger.info("MCP endpoint: %s", self.mcp_endpoint)
@@ -782,124 +803,129 @@ class AzureAISearchClient:
     @search_retry
     def agentic_retrieve(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, str]] | None = None,
+        *,
+        query: str | None = None,
     ) -> dict[str, Any]:
-        """
-        Execute agentic retrieval against the HR knowledge base.
+        """Execute agentic retrieval via REST 2026-04-01 (GA).
 
-        Sends conversation messages to the knowledge base, which
-        decomposes queries into subqueries, runs them against the
-        knowledge source, reranks results, and synthesizes an answer.
+        GA REST replaces the preview ``messages`` array with a single
+        ``intents`` array per turn. The HR application (Foundry agent +
+        MCPTool) is the actual production hot path; this helper exists
+        for direct REST testing and parity with the beta version's
+        components:
+        - ``intents[]`` with ``type: "semantic"`` and ``search`` text
+        - ``knowledgeSourceParams[]`` with reranker threshold and
+          include-references flags (kept from the beta version)
+        - Returns ``references`` (extractive grounding) and ``activity``
+          (query-planning trace) — the calling agent does synthesis.
 
         Args:
-            messages: Conversation history as list of
-                      {"role": "user"|"assistant", "content": "..."}.
+            messages: Optional conversation history. The last user
+                message's content becomes the retrieval ``intent.search``.
+                Provided for backward compatibility with beta callers.
+            query: Explicit query string. Overrides ``messages`` when set.
 
         Returns:
-            Dict with "response" (synthesized answer), "matches"
-            (normalised references), and "activity" (query plan).
+            Dict with ``response`` (joined extractive snippets),
+            ``matches`` (normalised references), and ``activity`` (the
+            query plan emitted by the service).
         """
         if not AGENTIC_RETRIEVAL_AVAILABLE:
-            raise RuntimeError("Agentic retrieval SDK classes not available")
+            raise RuntimeError("Agentic retrieval REST helpers unavailable (missing deps)")
 
         if not self.search_endpoint:
             raise RuntimeError("AZURE_SEARCH_ENDPOINT not set")
 
+        # Resolve the search text from explicit query or last user message
+        search_text = (query or "").strip()
+        if not search_text and messages:
+            for msg in reversed(messages):
+                if msg.get("role") == "user" and msg.get("content"):
+                    search_text = msg["content"].strip()
+                    break
+        if not search_text:
+            raise ValueError("agentic_retrieve requires a non-empty query or user message")
+
         kb_name = _AGENTIC_CONFIG.get("knowledge_base_name", "hr-knowledge-base")
         ks_name = _AGENTIC_CONFIG.get("knowledge_source_name", "hr-knowledge-source")
 
-        reasoning_effort_str = _AGENTIC_CONFIG.get(
-            "retrieval_reasoning_effort",
-            _FOUNDRY_AGENT_CONFIG.get("retrieval_reasoning", "medium"),
-        )
-        reasoning_effort = (
-            KnowledgeRetrievalLowReasoningEffort()
-            if reasoning_effort_str == "low"
-            else KnowledgeRetrievalMediumReasoningEffort()
-        )
-
         include_refs = _AGENTIC_CONFIG.get("include_references", True)
         include_ref_data = _AGENTIC_CONFIG.get("include_reference_source_data", True)
-        always_query = _AGENTIC_CONFIG.get("always_query_source", True)
-        include_activity = _AGENTIC_CONFIG.get("include_activity", True)
+        reranker_threshold = _AGENTIC_CONFIG.get("reranker_threshold", 2.5)
+        max_runtime = _AGENTIC_CONFIG.get("max_runtime_in_seconds", 30)
+        max_output_tokens = _AGENTIC_CONFIG.get("max_output_size_in_tokens", 6000)
 
-        agent_client = KnowledgeBaseRetrievalClient(
-            endpoint=self.search_endpoint,
-            knowledge_base_name=kb_name,
-            credential=self._get_credential(),
+        body: dict[str, Any] = {
+            "intents": [
+                {"type": "semantic", "search": search_text}
+            ],
+            "knowledgeSourceParams": [
+                {
+                    "knowledgeSourceName": ks_name,
+                    "kind": "searchIndex",
+                    "includeReferences": include_refs,
+                    "includeReferenceSourceData": include_ref_data,
+                    "rerankerThreshold": reranker_threshold,
+                }
+            ],
+            "maxRuntimeInSeconds": max_runtime,
+            "maxOutputSizeInTokens": max_output_tokens,
+        }
+
+        url = (
+            f"{self.search_endpoint.rstrip('/')}/knowledgebases/{kb_name}/retrieve"
+            f"?api-version={KB_REST_API_VERSION}"
         )
 
-        kb_messages = [
-            KnowledgeBaseMessage(
-                role=m["role"],
-                content=[KnowledgeBaseMessageTextContent(text=m["content"])],  # type: ignore[arg-type]
+        token = self._get_search_bearer_token()
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=KB_REST_TIMEOUT_SECONDS,
+        )
+        if response.status_code >= 400:
+            logger.error(
+                "Agentic retrieve failed (%s): %s",
+                response.status_code, response.text,
             )
-            for m in messages
-            if m["role"] != "system"
-        ]
+            response.raise_for_status()
 
-        req = KnowledgeBaseRetrievalRequest(
-            messages=kb_messages,
-            knowledge_source_params=[
-                SearchIndexKnowledgeSourceParams(
-                    knowledge_source_name=ks_name,
-                    include_references=include_refs,
-                    include_reference_source_data=include_ref_data,
-                    always_query_source=always_query,
-                )
-            ],  # type: ignore[arg-type]
-            include_activity=include_activity,
-            retrieval_reasoning_effort=reasoning_effort,
-        )
-
-        result = agent_client.retrieve(retrieval_request=req)
-
-        # -- Parse response ---------------------------------------------------
-        response_text = ""
-        if result.response:
-            parts = []
-            for resp in result.response:
-                for content_item in resp.content:
-                    content_dict = content_item.as_dict() if hasattr(content_item, "as_dict") else content_item
-                    if isinstance(content_dict, dict):
-                        parts.append(content_dict.get("text", ""))
-                    elif hasattr(content_item, "text"):
-                        parts.append(content_item.text)  # type: ignore[attr-defined]
-            response_text = "\n\n".join(parts) if parts else ""
+        result = response.json() or {}
 
         # -- Parse references → normalised matches ---------------------------
         matches: list[dict[str, Any]] = []
-        if result.references:
-            for ref in result.references:
-                ref_dict: dict[str, Any] = ref.as_dict() if hasattr(ref, "as_dict") else {}  # type: ignore[assignment]
-                src: dict[str, Any] = ref_dict.get("source_data", {}) or {}
-                matches.append({
-                    "content": src.get("snippet", src.get("page_chunk", "")),
-                    "filePath": src.get("metadata_storage_path", ""),
-                    "fileName": src.get("metadata_storage_name", ""),
-                    "parentTitle": src.get("parent_title", ""),
-                    "policyNumber": self._normalize_policy_number(
-                        src.get("policy_number", ""),
-                    ),
-                    "documentType": "",
-                    "container": "ask-hr-knowledge",
-                    "reranker_score": ref_dict.get("reranker_score"),
-                    "blob_url": src.get("blob_url", ""),
-                    "ref_id": ref_dict.get("id", ""),
-                })
+        for ref in result.get("references", []) or []:
+            src = ref.get("sourceData") or ref.get("source_data") or {}
+            matches.append({
+                "content": src.get("snippet", src.get("page_chunk", "")),
+                "filePath": src.get("metadata_storage_path", ""),
+                "fileName": src.get("metadata_storage_name", ""),
+                "parentTitle": src.get("parent_title", ""),
+                "policyNumber": self._normalize_policy_number(
+                    src.get("policy_number", ""),
+                ),
+                "documentType": "",
+                "container": "ask-hr-knowledge",
+                "reranker_score": ref.get("rerankerScore") or ref.get("reranker_score"),
+                "blob_url": src.get("blob_url", ""),
+                "ref_id": ref.get("id", ""),
+            })
 
-        # -- Parse activity ----------------------------------------------------
-        activity: list[Any] = []
-        if result.activity:
-            activity = [
-                a.as_dict() if hasattr(a, "as_dict") else a
-                for a in result.activity
-            ]
+        # -- Build response text from extractive snippets --------------------
+        response_text = "\n\n".join(
+            m["content"] for m in matches if m.get("content")
+        )
+
+        activity = result.get("activity", []) or []
 
         logger.info(
-            "Agentic retrieval: %d references, activity_steps=%d",
-            len(matches),
-            len(activity),
+            "Agentic retrieval (REST %s): %d references, activity_steps=%d",
+            KB_REST_API_VERSION, len(matches), len(activity),
         )
 
         return {

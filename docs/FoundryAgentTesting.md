@@ -237,8 +237,12 @@ PYTHONPATH=$PWD/src python tests/test_mcp_query_retrieval.py --pattern A --limit
 
 **Pattern B specific behavior:**
 - Client-side query classification detects file-location intent (regex-based)
-- File-location queries → `file_metadata_lookup` called directly (bypasses MCP), agent formats results
-- Content queries → Foundry Agent with MCPTool only (platform handles MCP natively, same as Pattern A)
+- File-location queries → `file_metadata_lookup` called directly (bypasses MCP),
+  results formatted by the `HRPolicyAgentB-FileLocation` agent (no tools)
+- Content queries → `HRPolicyAgentB` (Foundry Agent + MCPTool) — platform handles
+  MCP natively, same retrieval semantics as Pattern A
+- Two stable agent names instead of one prevent the portal from showing churn
+  between runs (see `_ensure_foundry_agent` in `src/agents/foundry_client.py`)
 - Activity data (subqueries, elapsed times) captured from the MCP content pipeline
 
 ---
@@ -330,14 +334,17 @@ https://ai.azure.com
 ### 2. View Agent Threads & Runs
 
 1. In the left nav, go to **Agents**
-2. You will see the agents created during test runs:
-   - `hr-source-validator-agent` (Step 2)
-   - `hr-reference-validator-agent` (Step 3)
-   - `hr-policy-answer-agent` (Step 4)
+2. You will see the persistent agents:
+   - `HRPolicyAgent` (Pattern A — single-agent MCP)
+   - `HRPolicyAgentB` (Pattern B — content/MCP path)
+   - `HRPolicyAgentB-FileLocation` (Pattern B — formatting agent for file-location queries)
 
-> **Note**: Agents are created on-the-fly per request and deleted after
-> completion. You will only see active agents if a request is currently
-> in progress. To see historical activity, use **Tracing** (see below).
+> **Note**: Agents are persistent and reused across runs. The orchestrator
+> calls `_ensure_foundry_agent()` ([`src/agents/foundry_client.py`](../src/agents/foundry_client.py))
+> which performs **get-or-create**: it reuses the existing version when
+> one exists, so the portal does not prompt "Save the Agent" between runs.
+> Set `RECREATE_FOUNDRY_AGENTS=true` to mint a fresh version on each call.
+> To inspect run history, use **Tracing** (see below).
 
 ### 3. View Tracing & Telemetry
 
@@ -348,9 +355,24 @@ https://ai.azure.com
    - Latency per step
    - Request/response payloads
 
-> **Prerequisite**: Tracing requires Application Insights connected to
-> your Foundry project. Set `AZURE_APPLICATION_INSIGHTS_CONNECTION_STRING`
-> in your `.env` file. If not configured, tracing data will not appear.
+> **Prerequisites for the Tracing tab to populate**:
+>
+> 1. **App Insights connection on the Foundry project** — a
+>    `Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01`
+>    resource of `category: 'AppInsights'`. The default lab Bicep
+>    ([`infra/bicep/main.bicep`](../infra/bicep/main.bicep)) creates one.
+>    For an existing project, deploy
+>    [`infra/bicep/connect-appinsights.bicep`](../infra/bicep/connect-appinsights.bicep).
+> 2. **`APPLICATIONINSIGHTS_CONNECTION_STRING`** in `.env` — the runtime
+>    needs this to ship spans. The orchestrators call `enable_tracing()`
+>    from [`src/observability.py`](../src/observability.py) at module
+>    load, which wires up `azure-monitor-opentelemetry`.
+> 3. **`AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true`** — set as a default
+>    by `enable_tracing()`. **Required** for the Azure AI Projects SDK to
+>    emit agent / tool spans. Without it the tab stays empty even when
+>    everything else is wired up.
+> 4. **Install the OTel dep with prereleases enabled**:
+>    `uv pip install --prerelease=allow 'azure-monitor-opentelemetry>=1.6.0,<2'`.
 
 ### 4. View Model Deployments
 

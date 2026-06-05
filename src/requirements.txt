@@ -1,0 +1,13 @@
+# Function App runtime deps — GA-only (default Copilot Studio → Foundry MCP path).
+aiohttp>=3.10,<4.0
+azure-ai-projects==2.2.0
+azure-functions==2.1.0
+azure-identity>=1.25.2
+azure-monitor-opentelemetry>=1.6.0,<2
+azure-search-documents>=12.0.0,<12.1
+azure-storage-blob>=12.28.0
+nest-asyncio>=1.6.0
+openai>=2.31.0
+pydantic>=2.12.5
+python-dotenv>=1.2.2
+tenacity>=9.0.0

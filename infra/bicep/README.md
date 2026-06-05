@@ -6,7 +6,8 @@ Resource-group-scoped Bicep module that deploys all lab resources.
 
 | File | Description |
 |------|-------------|
-| [main.bicep](main.bicep) | All resource definitions, RBAC assignments, and outputs |
+| [main.bicep](main.bicep) | All resource definitions, RBAC assignments, and outputs (includes `aiProjectAppInsightsConnection` so the Foundry portal Tracing tab is wired to App Insights) |
+| [connect-appinsights.bicep](connect-appinsights.bicep) | Targeted module — adds **only** the project ↔ App Insights connection. Use against an existing project that pre-dates the `aiProjectAppInsightsConnection` resource. |
 | [abbreviations.json](abbreviations.json) | Resource naming prefixes (e.g. `cog-`, `srch-`, `st`) |
 
 The parent entry point is [`../main.bicep`](../main.bicep) (subscription scope), which creates the resource group and invokes this module.
@@ -37,6 +38,31 @@ az deployment sub create \
 ```
 
 If Azure reports a global name conflict for Cognitive Services or Search, set `resourceNameSuffix` to a short unique value such as `lab2`.
+
+## Deploying only the project ↔ App Insights connection
+
+If your Foundry project was provisioned before `aiProjectAppInsightsConnection`
+existed in [`main.bicep`](main.bicep) and the **Tracing** tab in the Foundry
+portal is empty, deploy the targeted module that creates only the connection
+(no other churn):
+
+```bash
+az deployment group create \
+  -g <resource-group> \
+  -f infra/bicep/connect-appinsights.bicep \
+  -p foundryAccountName=<cognitiveServicesAccountName> \
+     foundryProjectName=<foundryProjectName> \
+     appInsightsName=<existingAppInsightsName>
+```
+
+Pass `appInsightsResourceGroup=<rg>` if the Application Insights component
+lives in a different resource group from the Foundry project.
+
+The runtime side (orchestrators) calls `enable_tracing()` from
+[`../../src/observability.py`](../../src/observability.py) to wire up
+`azure-monitor-opentelemetry`. See the
+[main README](../../README.md#observability--foundry-portal-tracing) for the
+required env vars.
 
 ## Parameters
 

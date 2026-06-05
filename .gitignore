@@ -148,3 +148,4 @@ src/content_understanding/
 local.settings.json
 
 tests/*.json
+.env.bak.*

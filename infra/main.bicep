@@ -55,7 +55,7 @@ param functionAuthAllowedClientIds array = []
 param principalId string = ''
 
 // ---------- Resource Group ----------
-resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: 'rg-${resourcePrefix}-${environmentName}'
   location: location
 }

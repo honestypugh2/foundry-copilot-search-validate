@@ -91,6 +91,64 @@ def ensure_agent(agent_name: str, model: str, instructions: str, tools: list | N
     return {"name": agent.name, "version": agent.version}
 
 
+async def _ensure_foundry_agent(
+    project_client,
+    agent_name: str,
+    definition,
+    role_label: str = "Foundry agent",
+):
+    """
+    Async get-or-create for a Foundry PromptAgent.
+
+    Reuses the existing latest version when one exists. Avoids minting a
+    fresh draft on every invocation, which is what caused the Foundry
+    portal to prompt "Save the Agent" on every click.
+
+    Set ``RECREATE_FOUNDRY_AGENTS=true`` to force a new version (after
+    editing instructions or tools).
+
+    Args:
+        project_client: an ``azure.ai.projects.aio.AIProjectClient`` instance.
+        agent_name:    stable agent name (e.g. ``HRPolicyAgent``).
+        definition:    ``PromptAgentDefinition`` instance for create_version.
+        role_label:    label used in log messages.
+
+    Returns the agent (or a SimpleNamespace with ``.name`` and ``.version``
+    when an existing version was reused).
+    """
+    from types import SimpleNamespace
+
+    force_recreate = os.getenv("RECREATE_FOUNDRY_AGENTS", "false").lower() == "true"
+
+    if not force_recreate:
+        try:
+            existing = await project_client.agents.get(agent_name=agent_name)
+            latest = (existing.versions or {}).get("latest", {}) if hasattr(existing, "versions") else {}
+            version = (
+                getattr(latest, "version", None)
+                if not isinstance(latest, dict)
+                else latest.get("version")
+            )
+            if version:
+                logger.info(
+                    "%s: reusing existing agent (name=%s, version=%s)",
+                    role_label, existing.name, version,
+                )
+                return SimpleNamespace(name=existing.name, version=version)
+        except Exception as e:  # not found or transient
+            logger.debug("%s: get(agent_name=%s) -> %s", role_label, agent_name, e)
+
+    agent = await project_client.agents.create_version(
+        agent_name=agent_name,
+        definition=definition,
+    )
+    logger.info(
+        "%s: agent created (name=%s, version=%s)",
+        role_label, agent.name, agent.version,
+    )
+    return agent
+
+
 def invoke_agent(agent_name: str, user_message: str) -> str:
     """
     Invoke a registered agent via conversations + responses API.

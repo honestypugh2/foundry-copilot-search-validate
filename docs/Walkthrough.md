@@ -1,5 +1,14 @@
 # End-to-End Walkthrough: Agentic Retrieval with Azure AI Search + Foundry Agent Service
 
+> ⚠️ **Development reference only.** Production deployments must follow the
+> [Azure Well-Architected Framework](https://learn.microsoft.com/azure/well-architected/)
+> and Microsoft best practices. The default Copilot Studio → Foundry Agent +
+> MCP agentic-retrieval pattern in this walkthrough uses **GA-only** Python
+> packages (`azure-ai-projects` 2.2.0, `azure-search-documents` 12.0.0).
+> Preview Microsoft Agent Framework experimentation lives under
+> [`src/agents_af/`](../src/agents_af/README.md) and is isolated to a separate
+> virtual environment — do not ship it.
+
 This walkthrough guides you step-by-step through the complete HR Policy Knowledge Base pipeline — from uploading documents to getting grounded answers with citations. Each pattern is explained with its purpose, the gap it resolves, and sample terminal output.
 
 > **Reference:** This solution follows the [Microsoft Tutorial: Build an end-to-end agentic retrieval solution](https://learn.microsoft.com/en-us/azure/search/agentic-retrieval-how-to-create-pipeline), adapted to an HR policy knowledge base with Pattern A/B orchestration and evaluation harness.
@@ -69,7 +78,7 @@ This solution combines **Azure AI Search** and **Microsoft Foundry** to create a
 | Azure AI Search | Any region with [agentic retrieval support](https://learn.microsoft.com/en-us/azure/search/search-region-support) |
 | Microsoft Foundry project | With a deployed LLM (e.g., `gpt-5` or `gpt-4.1`) |
 | Text embedding model | `text-embedding-3-small` (1536 dimensions), deployed in your project |
-| Python 3.12+ | With `uv` or `pip` for dependency management |
+| Python 3.13+ | With `uv` or `pip` for dependency management |
 | Azure CLI | For keyless authentication (`az login`) |
 | VS Code | Recommended, with Python extension |
 

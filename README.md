@@ -1,5 +1,19 @@
 # Foundry Copilot Search Validate
 
+> ⚠️ **Development reference only.** This repository is a learning / evaluation
+> harness. Production deployments **must** follow the
+> [Azure Well-Architected Framework](https://learn.microsoft.com/azure/well-architected/)
+> and Microsoft best practices for security, reliability, cost, operations, and
+> performance. Use the GA-only pattern below; do not ship preview packages.
+>
+> **Default supported pattern:** Copilot Studio → Azure AI Foundry Agent +
+> Azure AI Search MCP for agentic retrieval, using **GA-only** Python
+> dependencies (`azure-ai-projects` 2.2.0 GA, `azure-search-documents` 12.0.0
+> GA). Preview Microsoft Agent Framework experimentation lives under
+> [`src/agents_af/`](src/agents_af/README.md) and must be installed in a
+> separate virtual environment — see that folder's README. **Never** mix the
+> preview path into a production deployment.
+
 End-to-end agentic retrieval pipeline using Azure AI Foundry Agents, Azure AI Search
 (MCP), and Copilot Studio — with built-in citation validation and evaluation harness.
 Documents are stored in Azure Blob Storage and indexed via Azure AI Search with
@@ -96,17 +110,22 @@ formatting in one pass. The platform handles the MCP call transparently.
 
 ```
 User Query → Client-Side Query Classification
-    ├─ Content question → Foundry Agent (MCPTool only) → Answer with Citations
-    └─ File-location question → file_metadata_lookup (direct index search) → Agent formats
+    ├─ Content question → HRPolicyAgentB (MCPTool only) → Answer with Citations
+    └─ File-location question → file_metadata_lookup (direct index search)
+                                  → HRPolicyAgentB-FileLocation (no tools, formatting only)
 ```
 
 Pattern B uses **client-side query classification** to route queries to the optimal path:
 
-- **Content questions** → Foundry Agent with MCPTool only (platform handles MCP natively,
-  same as Pattern A — full KB retrieval with citations)
-- **File-location questions** → `file_metadata_lookup` called directly (bypasses MCP entirely),
-  results formatted by the agent. Returns deterministic metadata: `metadata_storage_path`,
-  `metadata_storage_name`, `blob_url`.
+- **Content questions** → `HRPolicyAgentB` (Foundry Agent + MCPTool, platform handles
+  MCP natively — same retrieval semantics as Pattern A, full KB citations).
+- **File-location questions** → `file_metadata_lookup` called directly (bypasses MCP),
+  results formatted by `HRPolicyAgentB-FileLocation` (a no-tools agent). Returns
+  deterministic metadata: `metadata_storage_path`, `metadata_storage_name`, `blob_url`.
+
+Two stable agent names instead of one prevent definition churn — see
+[`src/agents/foundry_client.py`](src/agents/foundry_client.py) `_ensure_foundry_agent`
+and `RECREATE_FOUNDRY_AGENTS` in the env-var table below.
 
 This provides **deterministic file paths** — no LLM hallucination risk for metadata —
 while preserving full KB retrieval with native MCP citations for content questions.
@@ -140,9 +159,15 @@ copilot/                                # Copilot Studio integration
 ├── manifest.json
 └── openapi.yaml
 src/
+├── observability.py                    # enable_tracing() — Azure Monitor + OTel bootstrap
+├── function_app.py                     # Azure Functions entry-points (/api/ask)
+├── models.py                           # Pydantic request / response models
+├── host.json
+├── local.settings.json
+├── requirements.txt
 ├── agents/                             # Foundry Agent Service (production)
 │   ├── __init__.py
-│   ├── foundry_client.py               # Shared AIProjectClient + OpenAI helpers
+│   ├── foundry_client.py               # Shared AIProjectClient + _ensure_foundry_agent helper
 │   ├── orchestrator_factory.py         # Pattern A/B routing (get_orchestrator)
 │   ├── orchestrator_pattern_b.py       # Pattern B: MCP + metadata lookup
 │   ├── register_agents.py              # One-time Foundry Agent registration
@@ -151,7 +176,7 @@ src/
 │   ├── reference_validator_agent.py    # Citation extraction + grounding
 │   ├── answer_synthesis_agent.py       # Answer synthesis (MCP or context-based)
 │   └── sequential_orchestrator_foundry.py  # Pattern A orchestrator (single-agent MCP)
-├── agents_af/                          # Agent Framework path (alternative)
+├── agents_af/                          # Agent Framework path (alternative, preview deps)
 │   ├── retrieval_agent.py
 │   ├── source_validator_agent.py
 │   ├── reference_validator_agent.py
@@ -160,33 +185,35 @@ src/
 ├── search/
 │   ├── __init__.py
 │   └── azure_ai_search_client.py
-├── api/
-│   ├── __init__.py
-│   ├── function_app.py
-│   └── models.py
-├── config/
-│   ├── search_config.json
-│   └── .env.example
-├── scripts/
-│   ├── index_knowledge_base.py
-│   ├── upload_to_blob.py
-│   └── regenerate_encrypted_docx.py
-├── tests/
-│   ├── conftest.py
-│   ├── test_mcp_query_retrieval.py
-│   ├── test_full_flow.py
-│   ├── test_agents_foundry.py
-│   └── ...
-├── docs/
-│   ├── AgentArchitecturePaths.md
-│   ├── FoundryAgentArchitecture.md
-│   ├── FoundryAgentTesting.md
-│   ├── IntegratedVectorizationPipeline.md
-│   ├── CopilotStudioIntegration.md
-│   └── MergeSkillRecommendations.md
-├── logs/
-├── requirements.txt
-└── README.md
+└── config/
+    └── search_config.json
+scripts/
+├── index_knowledge_base.py
+├── upload_to_blob.py
+└── regenerate_encrypted_docx.py
+tests/
+├── conftest.py
+├── test_mcp_query_retrieval.py
+├── test_full_flow.py
+├── test_agents_foundry.py
+├── test_retrieval_patterns_live.py     # Multi-pattern live driver
+└── ...
+docs/
+├── AgentArchitecturePaths.md
+├── FoundryAgentArchitecture.md
+├── FoundryAgentTesting.md
+├── IntegratedVectorizationPipeline.md
+├── CopilotStudioIntegration.md
+└── MergeSkillRecommendations.md
+infra/
+├── main.bicep                          # Subscription-scope entry point
+└── bicep/
+    ├── main.bicep                      # Resource definitions (incl. AppInsights project connection)
+    └── connect-appinsights.bicep       # Targeted: add only project ↔ AppInsights connection
+logs/
+requirements.txt                        # GA-only runtime deps
+requirements-agents-af.txt              # Preview Agent Framework deps (separate venv)
+README.md
 ```
 
 ## Skillset Pipeline
@@ -261,6 +288,51 @@ the full setup guide.
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | `gpt-5` | Model deployment for the agent |
 | `AZURE_SEARCH_ENDPOINT` | — | Azure AI Search endpoint |
 | `AZURE_SEARCH_INDEX` | `hr_lab_index` | Search index name |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | — | App Insights connection string. When set, `src/observability.py` calls `configure_azure_monitor` so spans flow to App Insights and surface in the Foundry portal **Tracing** tab. Unset = tracing is a silent no-op. |
+| `AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING` | `true` | Set by `enable_tracing()`. **Required** for the Azure AI Projects SDK to emit agent-run / tool-call spans. Without it the Tracing tab stays empty even when App Insights is wired up. |
+| `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` | `true` | Set by `enable_tracing()`. Captures prompt/completion text on spans. Set to `false` to scrub message contents. |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `true` | Set by `enable_tracing()`. Same as above for OTel-native instrumentations. |
+| `RECREATE_FOUNDRY_AGENTS` | `false` | Force `_ensure_foundry_agent` to mint a new agent version on every invocation. Default behavior is get-or-create — the orchestrator reuses the existing version of `HRPolicyAgent` / `HRPolicyAgentB` / `HRPolicyAgentB-FileLocation` so the portal stops prompting "Save the Agent" between runs. Flip to `true` only when intentionally editing instructions or tool definitions. |
+| `PERSIST_FOUNDRY_AGENTS` | `true` | When `false`, the orchestrator deletes the agent version it touched at the end of each run. Leave at `true` to keep agents visible in the portal. |
+
+## Observability / Foundry Portal Tracing
+
+The orchestrators in `src/agents/` and `src/agents_af/` call
+`enable_tracing()` (from [`src/observability.py`](src/observability.py)) at module
+load. This:
+
+1. Reads `APPLICATIONINSIGHTS_CONNECTION_STRING` from the env (no-op if unset).
+2. Defaults `AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true` so the Azure AI
+   Projects SDK actually emits agent / tool spans.
+3. Calls `azure.monitor.opentelemetry.configure_azure_monitor(...)` to wire the
+   OTel exporter to App Insights.
+4. Best-effort calls `agent_framework.observability.setup_observability()` for
+   the AF pipeline.
+5. Registers an `atexit` hook that force-flushes the tracer provider so
+   short-lived CLI / test runs don't drop buffered spans.
+
+For the **Foundry portal Tracing tab** to populate you also need an
+`AppInsights`-category connection on the project itself
+(`Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01`). The
+default lab Bicep already creates one in
+[`infra/bicep/main.bicep`](infra/bicep/main.bicep). For an existing project
+that's missing the connection, deploy the targeted module:
+
+```bash
+az deployment group create \
+  -g <rg> \
+  -f infra/bicep/connect-appinsights.bicep \
+  -p foundryAccountName=<accountName> \
+     foundryProjectName=<projectName> \
+     appInsightsName=<existingAppInsightsName>
+```
+
+Install the runtime dependency with **prereleases enabled** (the OTel
+instrumentation libraries it pulls are still in beta):
+
+```bash
+uv pip install --prerelease=allow 'azure-monitor-opentelemetry>=1.6.0,<2'
+```
 
 ## Further Documentation
 

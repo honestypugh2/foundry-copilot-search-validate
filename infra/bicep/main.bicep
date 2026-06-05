@@ -72,7 +72,7 @@ var resourceToken = toLower('${resourcePrefix}-${environmentName}-${uniqueSuffix
 // ============================================================================
 // 1. Azure AI Foundry (AIServices) — unified cognitive services account
 // ============================================================================
-resource aiServices 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
+resource aiServices 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: '${abbrs.cognitiveServicesAccounts}${resourceToken}'
   location: location
   kind: 'AIServices'
@@ -89,7 +89,7 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = 
 // ============================================================================
 // 2. AI Foundry Project (child of AIServices)
 // ============================================================================
-resource aiProject 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-preview' = {
+resource aiProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   parent: aiServices
   name: '${abbrs.cognitiveServicesProjects}${resourceToken}'
   location: location
@@ -102,7 +102,7 @@ resource aiProject 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-pre
 // ============================================================================
 // 3. GPT-4.1 Deployment (chat / inference — Foundry agent model)
 // ============================================================================
-resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: aiServices
   name: openAIDeploymentName
   sku: {
@@ -121,7 +121,7 @@ resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
 // ============================================================================
 // 4. GPT-5 Deployment (advanced reasoning)
 // ============================================================================
-resource gpt5Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+resource gpt5Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: aiServices
   name: gpt5DeploymentName
   sku: {
@@ -141,7 +141,7 @@ resource gpt5Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-0
 // ============================================================================
 // 5. text-embedding-3-small Deployment (vector embeddings for hybrid search)
 // ============================================================================
-resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: aiServices
   name: embeddingDeploymentName
   sku: {
@@ -161,7 +161,7 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
 // ============================================================================
 // 6. Azure AI Search (semantic ranker enabled for hybrid search)
 // ============================================================================
-resource search 'Microsoft.Search/searchServices@2024-06-01-preview' = {
+resource search 'Microsoft.Search/searchServices@2025-05-01' = {
   name: '${abbrs.searchSearchServices}${resourceToken}'
   location: location
   sku: { name: searchSku }
@@ -169,7 +169,7 @@ resource search 'Microsoft.Search/searchServices@2024-06-01-preview' = {
   properties: {
     replicaCount: 1
     partitionCount: 1
-    hostingMode: 'default'
+    hostingMode: 'Default'
     semanticSearch: semanticSearchTier
     publicNetworkAccess: enablePrivateEndpoints ? 'disabled' : 'enabled'
     disableLocalAuth: disableLocalAuth
@@ -179,7 +179,7 @@ resource search 'Microsoft.Search/searchServices@2024-06-01-preview' = {
 // ============================================================================
 // 7. Azure Document Intelligence (FormRecognizer)
 // ============================================================================
-resource docIntelligence 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
+resource docIntelligence 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: '${abbrs.cognitiveServicesFormRecognizer}${resourceToken}'
   location: location
   kind: 'FormRecognizer'
@@ -195,7 +195,7 @@ resource docIntelligence 'Microsoft.CognitiveServices/accounts@2025-04-01-previe
 // ============================================================================
 // 8. Azure Storage Account (knowledge base documents + blob storage)
 // ============================================================================
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: '${storageAccountPrefix}${defaultUniqueSuffix}'
   location: location
   kind: 'StorageV2'
@@ -213,7 +213,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: storage
   name: 'default'
   properties: {
@@ -225,7 +225,7 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
 }
 
 // Container name matches src/config/search_config.json blob_storage.container_name
-resource knowledgeBaseContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource knowledgeBaseContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = {
   parent: blobService
   name: 'ask-hr-knowledge'
   properties: {
@@ -323,7 +323,7 @@ resource searchOpenAIUserRole 'Microsoft.Authorization/roleAssignments@2022-04-0
 // ============================================================================
 // 11. Monitoring — Log Analytics + Application Insights
 // ============================================================================
-resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   name: '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
   location: location
   properties: {
@@ -344,10 +344,35 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
+// ----------------------------------------------------------------------------
+// 11a. AI Foundry project ↔ Application Insights connection
+// ----------------------------------------------------------------------------
+// Required for the Foundry portal Tracing tab to surface agent traces.
+// Without this connection the portal Tracing view stays empty even when
+// telemetry is being emitted, because Foundry only renders traces from an
+// App Insights resource that is linked to the project.
+resource aiProjectAppInsightsConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = {
+  parent: aiProject
+  name: 'appInsightsConnection'
+  properties: {
+    category: 'AppInsights'
+    target: appInsights.id
+    authType: 'ApiKey'
+    isSharedToAll: true
+    metadata: {
+      ApiType: 'Azure'
+      ResourceId: appInsights.id
+    }
+    credentials: {
+      key: appInsights.properties.ConnectionString
+    }
+  }
+}
+
 // ============================================================================
 // 12. Key Vault — centralized secrets store
 // ============================================================================
-resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: take('${abbrs.keyVaultVaults}${resourceToken}', 24)
   location: location
   properties: {
@@ -370,13 +395,13 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
 // ============================================================================
 
 // User-assigned managed identity for the Function App (used for Azure RBAC)
-resource funcIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource funcIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: '${abbrs.managedIdentityUserAssignedIdentities}func-${resourceToken}'
   location: location
 }
 
 // Dedicated storage account for Function runtime (separate from data storage)
-resource funcStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource funcStorage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: take('stf${defaultUniqueSuffix}', 24)
   location: location
   kind: 'StorageV2'
@@ -389,18 +414,32 @@ resource funcStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-// Linux Consumption (Y1) plan for cost-effective serverless hosting
-resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {
+// Flex Consumption (FC1) plan — supports Python 3.13 and per-app scale.
+resource appServicePlan 'Microsoft.Web/serverfarms@2024-11-01' = {
   name: '${abbrs.webServerFarms}${resourceToken}'
   location: location
-  kind: 'linux'
-  sku: { name: 'Y1', tier: 'Dynamic' }
+  kind: 'functionapp,linux'
+  sku: { name: 'FC1', tier: 'FlexConsumption' }
   properties: {
     reserved: true
   }
 }
 
-resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
+// Deployment container for the Flex zip package (managed-identity auth).
+resource funcDeploymentBlobService 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' existing = {
+  name: 'default'
+  parent: funcStorage
+}
+
+resource funcDeploymentContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = {
+  name: 'app-package'
+  parent: funcDeploymentBlobService
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
   name: '${abbrs.webSitesFunctions}${resourceToken}'
   location: location
   kind: 'functionapp,linux'
@@ -414,8 +453,30 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     serverFarmId: appServicePlan.id
     httpsOnly: true
     virtualNetworkSubnetId: enablePrivateEndpoints ? networking!.outputs.funcSubnetId : null
+    // Flex Consumption: linuxFxVersion is forbidden; runtime is set under
+    // properties.functionAppConfig.runtime instead. Deployment.storage uses
+    // managed identity (no shared key needed).
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: '${funcStorage.properties.primaryEndpoints.blob}${funcDeploymentContainer.name}'
+          authentication: {
+            type: 'UserAssignedIdentity'
+            userAssignedIdentityResourceId: funcIdentity.id
+          }
+        }
+      }
+      scaleAndConcurrency: {
+        instanceMemoryMB: 2048
+        maximumInstanceCount: 100
+      }
+      runtime: {
+        name: 'python'
+        version: '3.13'
+      }
+    }
     siteConfig: {
-      linuxFxVersion: 'Python|3.12'
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
       http20Enabled: true
@@ -428,11 +489,12 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         ]
       }
       appSettings: [
+        // Flex Consumption requires AzureWebJobsStorage to be set with
+        // managed-identity auth; do NOT set FUNCTIONS_EXTENSION_VERSION or
+        // FUNCTIONS_WORKER_RUNTIME (they are managed by functionAppConfig.runtime).
         { name: 'AzureWebJobsStorage__accountName', value: funcStorage.name }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
         { name: 'AzureWebJobsStorage__clientId', value: funcIdentity.properties.clientId }
-        { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
-        { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'python' }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
         { name: 'AZURE_CLIENT_ID', value: funcIdentity.properties.clientId }
         { name: 'AZURE_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
@@ -553,7 +615,7 @@ module networking 'modules/networking.bicep' = if (enablePrivateEndpoints) {
 // `api://<functionAuthClientId>` and present it as `Authorization: Bearer`.
 // The Function App's `auth_level=FUNCTION` is still enforced at the route
 // level; Easy Auth runs before route execution and rejects invalid tokens.
-resource functionAuth 'Microsoft.Web/sites/config@2024-04-01' = if (enableFunctionAuth) {
+resource functionAuth 'Microsoft.Web/sites/config@2024-11-01' = if (enableFunctionAuth) {
   parent: functionApp
   name: 'authsettingsV2'
   properties: {

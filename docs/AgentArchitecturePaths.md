@@ -159,10 +159,18 @@ No Agent Framework SequentialBuilder — the orchestration is in Python code.
 from azure.ai.projects.aio import AIProjectClient
 from azure.ai.projects.models import PromptAgentDefinition
 
+from agents.foundry_client import _ensure_foundry_agent
+
 async with AIProjectClient(endpoint=endpoint, credential=credential) as client:
-    agent = await client.agents.create_version(
+    # Get-or-create: reuse the existing version when one exists, only mint a
+    # new version when the agent is missing or RECREATE_FOUNDRY_AGENTS=true.
+    # This is what stops the Foundry portal from prompting "Save the Agent"
+    # between runs.
+    agent = await _ensure_foundry_agent(
+        client,
         agent_name="HRAnswerSynthesisFoundry",
         definition=PromptAgentDefinition(model="gpt-4.1", instructions="..."),
+        role_label="Pattern A single-agent MCP",
     )
     openai_client = client.get_openai_client()
     conversation = await openai_client.conversations.create()

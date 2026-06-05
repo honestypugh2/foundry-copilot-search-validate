@@ -1,5 +1,11 @@
 # Copilot Studio Integration Guide (Lab Pipeline)
 
+> ⚠️ **Development reference only.** Production deployments must follow the
+> [Azure Well-Architected Framework](https://learn.microsoft.com/azure/well-architected/)
+> and Microsoft best practices. The supported pattern for Copilot Studio
+> calling Foundry Agents with MCP for agentic retrieval uses **GA-only**
+> Python packages.
+
 This document describes how **Copilot Studio** integrates with the HR Policy
 Knowledge Lab pipeline — specifically the Azure AI Search index and the
 Azure AI Foundry Agent — so employees can ask HR questions from Teams or web chat.

@@ -414,48 +414,56 @@ class TestAgenticRetrievalClientExtractive:
         """agentic_retrieve normalizes KB references into match dicts."""
         test_logger.info("─── SearchClient: agentic_retrieve reference parsing ───")
 
-        # Mock the KnowledgeBaseRetrievalClient response
-        mock_ref = MagicMock()
-        mock_ref.as_dict.return_value = {
-            "id": "ref-001",
-            "reranker_score": 3.85,
-            "source_data": {
-                "snippet": "PTO is accrued at 1.5 days per month.",
-                "metadata_storage_path": "https://storage.blob.core.windows.net/ask-hr-knowledge/51350.pdf",
-                "metadata_storage_name": "51350 - Types of Leave_ Paid Time Off (PTO) (23472_2).docx",
-                "parent_title": "51350 - Types of Leave_ Paid Time Off (PTO) (23472_2).docx",
-                "policy_number": "51350",
-                "blob_url": "https://storage.blob.core.windows.net/ask-hr-knowledge/51350.pdf",
-            },
+        # GA REST 2026-04-01 response shape: camelCase sourceData + rerankerScore
+        rest_payload = {
+            "references": [
+                {
+                    "id": "ref-001",
+                    "rerankerScore": 3.85,
+                    "sourceData": {
+                        "snippet": "PTO is accrued at 1.5 days per month.",
+                        "metadata_storage_path": "https://storage.blob.core.windows.net/ask-hr-knowledge/51350.pdf",
+                        "metadata_storage_name": "51350 - Types of Leave_ Paid Time Off (PTO) (23472_2).docx",
+                        "parent_title": "51350 - Types of Leave_ Paid Time Off (PTO) (23472_2).docx",
+                        "policy_number": "51350",
+                        "blob_url": "https://storage.blob.core.windows.net/ask-hr-knowledge/51350.pdf",
+                    },
+                },
+            ],
+            "activity": [
+                {"type": "search", "knowledgeSourceName": "hr-knowledge-source"},
+            ],
         }
 
-        mock_activity = MagicMock()
-        mock_activity.as_dict.return_value = {
-            "type": "search",
-            "knowledge_source": "hr-knowledge-source",
-        }
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = rest_payload
 
-        mock_result = MagicMock()
-        mock_result.response = []  # EXTRACTIVE: empty response
-        mock_result.references = [mock_ref]
-        mock_result.activity = [mock_activity]
+        with patch("search.azure_ai_search_client.AGENTIC_RETRIEVAL_AVAILABLE", True), \
+             patch("search.azure_ai_search_client.requests.post", return_value=mock_response) as mock_post:
 
-        with patch("search.azure_ai_search_client.AGENTIC_RETRIEVAL_AVAILABLE", True):
-            with patch(
-                "search.azure_ai_search_client.KnowledgeBaseRetrievalClient"
-            ) as MockKB:
-                mock_kb_instance = MockKB.return_value
-                mock_kb_instance.retrieve.return_value = mock_result
+            from search.azure_ai_search_client import AzureAISearchClient
 
-                from search.azure_ai_search_client import AzureAISearchClient
+            with patch.dict(os.environ, {"AZURE_SEARCH_ENDPOINT": "https://search.test.com"}):
+                client = AzureAISearchClient()
+                # Bypass AAD bearer acquisition in tests
+                client._get_search_bearer_token = MagicMock(return_value="fake-token")
+                result = client.agentic_retrieve(
+                    [{"role": "user", "content": "What is the PTO policy?"}]
+                )
 
-                with patch.dict(os.environ, {"AZURE_SEARCH_ENDPOINT": "https://search.test.com"}):
-                    client = AzureAISearchClient()
-                    result = client.agentic_retrieve(
-                        [{"role": "user", "content": "What is the PTO policy?"}]
-                    )
+        # Verify REST call shape (URL + intents body)
+        assert mock_post.called, "requests.post should have been invoked"
+        call_args = mock_post.call_args
+        url = call_args.args[0] if call_args.args else call_args.kwargs["url"]
+        assert "/knowledgebases/" in url
+        assert "/retrieve" in url
+        assert "api-version=2026-04-01" in url
+        body = call_args.kwargs["json"]
+        assert body["intents"][0]["search"] == "What is the PTO policy?"
+        assert body["knowledgeSourceParams"][0]["kind"] == "searchIndex"
 
-        assert result["response"] == ""
+        # Verify normalised matches
         assert len(result["matches"]) == 1
         match = result["matches"][0]
         assert match["content"] == "PTO is accrued at 1.5 days per month."
@@ -463,23 +471,24 @@ class TestAgenticRetrievalClientExtractive:
         assert match["container"] == "ask-hr-knowledge"
         assert match["reranker_score"] == 3.85
         assert match["ref_id"] == "ref-001"
+        # response_text is now built from extracted snippets (GA: no separate response field)
+        assert result["response"] == "PTO is accrued at 1.5 days per month."
         test_logger.info("  ✓ agentic_retrieve reference parsing OK (EXTRACTIVE)")
 
     def test_agentic_retrieve_handles_multiple_references(self, test_logger):
         """Multiple references are all normalized into matches."""
         test_logger.info("─── SearchClient: multiple EXTRACTIVE references ───")
 
-        mock_refs = []
+        references = []
         for i, (snippet, policy) in enumerate([
             ("PTO accrual rules", "51350"),
             ("Dress code requirements", "52005"),
             ("Holiday pay schedule", "50715"),
         ]):
-            ref = MagicMock()
-            ref.as_dict.return_value = {
+            references.append({
                 "id": f"ref-{i:03d}",
-                "reranker_score": 3.5 - (i * 0.1),
-                "source_data": {
+                "rerankerScore": 3.5 - (i * 0.1),
+                "sourceData": {
                     "snippet": snippet,
                     "metadata_storage_path": f"https://storage.blob.core.windows.net/ask-hr-knowledge/{policy}.pdf",
                     "metadata_storage_name": f"{policy} - Policy.docx",
@@ -487,28 +496,23 @@ class TestAgenticRetrievalClientExtractive:
                     "policy_number": policy,
                     "blob_url": f"https://storage.blob.core.windows.net/ask-hr-knowledge/{policy}.pdf",
                 },
-            }
-            mock_refs.append(ref)
+            })
 
-        mock_result = MagicMock()
-        mock_result.response = []
-        mock_result.references = mock_refs
-        mock_result.activity = []
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"references": references, "activity": []}
 
-        with patch("search.azure_ai_search_client.AGENTIC_RETRIEVAL_AVAILABLE", True):
-            with patch(
-                "search.azure_ai_search_client.KnowledgeBaseRetrievalClient"
-            ) as MockKB:
-                mock_kb_instance = MockKB.return_value
-                mock_kb_instance.retrieve.return_value = mock_result
+        with patch("search.azure_ai_search_client.AGENTIC_RETRIEVAL_AVAILABLE", True), \
+             patch("search.azure_ai_search_client.requests.post", return_value=mock_response):
 
-                from search.azure_ai_search_client import AzureAISearchClient
+            from search.azure_ai_search_client import AzureAISearchClient
 
-                with patch.dict(os.environ, {"AZURE_SEARCH_ENDPOINT": "https://search.test.com"}):
-                    client = AzureAISearchClient()
-                    result = client.agentic_retrieve(
-                        [{"role": "user", "content": "HR policies overview"}]
-                    )
+            with patch.dict(os.environ, {"AZURE_SEARCH_ENDPOINT": "https://search.test.com"}):
+                client = AzureAISearchClient()
+                client._get_search_bearer_token = MagicMock(return_value="fake-token")
+                result = client.agentic_retrieve(
+                    [{"role": "user", "content": "HR policies overview"}]
+                )
 
         assert len(result["matches"]) == 3
         policies = [m["policyNumber"] for m in result["matches"]]
@@ -522,25 +526,21 @@ class TestAgenticRetrievalClientExtractive:
         """Handles case where no references are returned."""
         test_logger.info("─── SearchClient: EXTRACTIVE with no references ───")
 
-        mock_result = MagicMock()
-        mock_result.response = []
-        mock_result.references = None
-        mock_result.activity = []
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"references": [], "activity": []}
 
-        with patch("search.azure_ai_search_client.AGENTIC_RETRIEVAL_AVAILABLE", True):
-            with patch(
-                "search.azure_ai_search_client.KnowledgeBaseRetrievalClient"
-            ) as MockKB:
-                mock_kb_instance = MockKB.return_value
-                mock_kb_instance.retrieve.return_value = mock_result
+        with patch("search.azure_ai_search_client.AGENTIC_RETRIEVAL_AVAILABLE", True), \
+             patch("search.azure_ai_search_client.requests.post", return_value=mock_response):
 
-                from search.azure_ai_search_client import AzureAISearchClient
+            from search.azure_ai_search_client import AzureAISearchClient
 
-                with patch.dict(os.environ, {"AZURE_SEARCH_ENDPOINT": "https://search.test.com"}):
-                    client = AzureAISearchClient()
-                    result = client.agentic_retrieve(
-                        [{"role": "user", "content": "nonexistent topic xyz"}]
-                    )
+            with patch.dict(os.environ, {"AZURE_SEARCH_ENDPOINT": "https://search.test.com"}):
+                client = AzureAISearchClient()
+                client._get_search_bearer_token = MagicMock(return_value="fake-token")
+                result = client.agentic_retrieve(
+                    [{"role": "user", "content": "nonexistent topic xyz"}]
+                )
 
         assert result["response"] == ""
         assert result["matches"] == []
