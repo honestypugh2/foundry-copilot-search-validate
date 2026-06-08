@@ -225,6 +225,16 @@ class AzureAISearchClient:
             logger.warning(
                 "USE_MANAGED_IDENTITY=false is no longer supported; forcing MI."
             )
+        # In Azure (App Service / Functions) there is no Azure CLI on the
+        # host, so AzureCliCredential fails at token acquisition with
+        # "Azure CLI not found on path". Use DefaultAzureCredential, which
+        # prefers the managed identity in Azure and falls back to the
+        # Azure CLI for local development.
+        running_in_azure = bool(
+            os.getenv("WEBSITE_INSTANCE_ID") or os.getenv("FUNCTIONS_WORKER_RUNTIME")
+        )
+        if running_in_azure:
+            return DefaultAzureCredential()
         try:
             return AzureCliCredential()
         except Exception:

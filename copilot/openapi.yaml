@@ -2,24 +2,34 @@ openapi: 3.0.3
 info:
   title: HR Policy Knowledge Lab API
   description: >
-    REST API for the agentic retrieval sequential pipeline.
-    Searches Azure AI Search, validates sources, and returns grounded
-    citations from the knowledge base.
+    REST API for the HR Policy Foundry Agent orchestrator. By default it runs
+    Pattern A (single-agent MCP, ORCHESTRATOR_PATTERN=A): a single Foundry
+    Agent with an MCPTool calls knowledge_base_retrieve against Azure AI Search
+    and returns a grounded, citation-backed answer. Set ORCHESTRATOR_PATTERN=B
+    for Pattern B (hybrid MCP + metadata lookup). The 4-step sequential
+    pipeline (retrieval, source validation, reference validation, answer
+    synthesis) is optional and enabled only via PIPELINE_MODE=multi_step.
   version: "1.0.0"
 
 servers:
-  - url: https://<your-function-app>.azurewebsites.net
+  - url: https://func-hr-policy-kb-lab-dev.azurewebsites.net
     description: Azure Function App (deployed)
+
+security:
+  - functionKey: []
 
 paths:
   /api/ask:
     post:
       operationId: askHRPolicy
       summary: Ask an HR policy question
+      security:
+        - functionKey: []
       description: >
-        Runs the sequential orchestrator pipeline
-        (Retrieval → Source Validation → Reference Validation)
-        and returns grounded, citation-backed results.
+        Runs the Foundry Agent orchestrator (Pattern A single-agent MCP by
+        default; Pattern B for file-location queries) and returns a grounded,
+        citation-backed answer. The optional multi-step pipeline
+        (PIPELINE_MODE=multi_step) additionally returns matches and references.
       requestBody:
         required: true
         content:
@@ -32,7 +42,7 @@ paths:
                 query:
                   type: string
                   description: Natural-language HR policy question
-                  example: "Find Policy 51350 on Paid Time Off"
+                  example: "What is the PTO policy?"
       responses:
         "200":
           description: Successful grounded response
@@ -43,11 +53,35 @@ paths:
                 properties:
                   status:
                     type: string
+                    description: Pipeline status (e.g. "completed")
                     example: completed
                   user_query:
                     type: string
+                    description: Echo of the submitted query
+                  answer:
+                    type: string
+                    description: >
+                      Grounded, citation-backed natural-language answer. Inline
+                      MCP citation annotations use the format
+                      【message_idx:search_idx†source_name】.
+                  pattern:
+                    type: string
+                    description: Orchestrator pattern used ("A" or "B")
+                    example: "A"
+                  pipeline_mode:
+                    type: string
+                    description: >
+                      Pipeline mode used ("single_agent", "pattern_b", or
+                      "multi_step")
+                    example: single_agent
+                  is_grounded:
+                    type: boolean
+                    description: Whether the answer is grounded in the knowledge base
                   matches:
                     type: array
+                    description: >
+                      Retrieval matches. Present only in multi-step mode
+                      (PIPELINE_MODE=multi_step).
                     items:
                       type: object
                       properties:
@@ -61,6 +95,9 @@ paths:
                           type: string
                   references:
                     type: array
+                    description: >
+                      Grounded citation references. Present only in multi-step
+                      mode (PIPELINE_MODE=multi_step).
                     items:
                       type: object
                       properties:
@@ -68,9 +105,19 @@ paths:
                           type: string
                         documentType:
                           type: string
-                  is_grounded:
-                    type: boolean
         "400":
           description: Invalid request
         "500":
           description: Internal server error
+
+components:
+  securitySchemes:
+    functionKey:
+      type: apiKey
+      in: query
+      name: code
+      description: >
+        Azure Functions host/function key passed as the 'code' query string
+        parameter. Retrieve with: az functionapp keys list -g
+        rg-hr-policy-kb-lab-dev -n func-hr-policy-kb-lab-dev. In Copilot Studio,
+        store this as the connector's API key so it is not hard-coded in the URL.

@@ -92,7 +92,7 @@ artefacts are:
 - `src/agents/sequential_orchestrator_foundry.py` (Pattern A — default)
 - `src/agents/orchestrator_pattern_b.py` (Pattern B — hybrid MCP + metadata)
 - `src/api/function_app.py` (Azure Functions host)
-- `infra/` Bicep / Terraform
+- `infra/` Bicep
 
 These rely only on `azure-ai-projects` 2.2.0 GA and `azure-search-documents`
 12.0.0 GA. See the top-level [README](../../README.md) for the production

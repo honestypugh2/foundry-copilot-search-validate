@@ -52,12 +52,6 @@ venv.bak/
 # Azure
 .azure/
 
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.backup
-.terraform.lock.hcl
-
 # Audio files (temporary recordings)
 *.wav
 *.mp3

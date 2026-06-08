@@ -157,10 +157,13 @@ PromptAgent definitions in the Foundry Portal via `register_agents.py`.
 ```
 copilot/                                # Copilot Studio integration
 ├── manifest.json
-└── openapi.yaml
+├── openapi.yaml                        # OpenAPI v3 action spec (/api/ask)
+├── openapi-v2.json                     # Swagger 2.0 spec for /api/ask (Copilot Studio REST tool)
+├── openapi-lookup-v2.json              # Swagger 2.0 spec for /api/lookup (file-location tool)
+└── quick_reference_guide.md            # Glossary + policy index for the client-side direct-answer path
 src/
 ├── observability.py                    # enable_tracing() — Azure Monitor + OTel bootstrap
-├── function_app.py                     # Azure Functions entry-points (/api/ask)
+├── function_app.py                     # Azure Functions entry-points (/api/ask, /api/lookup, /api/health)
 ├── models.py                           # Pydantic request / response models
 ├── host.json
 ├── local.settings.json
@@ -200,11 +203,18 @@ tests/
 └── ...
 docs/
 ├── AgentArchitecturePaths.md
+├── AgentFrameworkAgentTesting.md
+├── CopilotStudioAuth.md
+├── CopilotStudioHybridExample.md
+├── CopilotStudioIntegration.md
+├── CopilotStudioLookupRouting.md
+├── CostComparison.md
 ├── FoundryAgentArchitecture.md
 ├── FoundryAgentTesting.md
 ├── IntegratedVectorizationPipeline.md
-├── CopilotStudioIntegration.md
-└── MergeSkillRecommendations.md
+├── MergeSkillRecommendations.md
+├── RetrievalPatterns.md
+└── Walkthrough.md
 infra/
 ├── main.bicep                          # Subscription-scope entry point
 └── bicep/
@@ -260,7 +270,7 @@ func start
 |------|--------|-----|
 | **Upload** | `scripts/upload_to_blob.py` | Uploads documents from `data/knowledge_base_lab/` to the `ask-hr-knowledge` Blob container |
 | **Index** | `src/scripts/index_knowledge_base.py` | Creates the search index, data source, skillset, and indexer that reads from Blob Storage; provisions agentic retrieval resources |
-| **Query** | `src/api/function_app.py` | Serves the `/api/ask` endpoint — single-agent MCP pipeline by default |
+| **Query** | `src/function_app.py` | Serves the HTTP endpoints — `/api/ask` (single-agent MCP pipeline by default), `/api/lookup` (deterministic file-location lookup), `/api/health` (liveness) |
 
 > **Note**: The upload and indexing scripts are intentionally separate.
 > `upload_to_blob.py` puts documents into Blob Storage.
@@ -270,12 +280,38 @@ func start
 > retrieval at query time. Agentic retrieval is **not** used during
 > indexing — it is a query-time feature.
 
+## HTTP Endpoints
+
+`src/function_app.py` exposes three routes:
+
+| Method & Route | Auth | Purpose |
+|----------------|------|---------|
+| `POST /api/ask` | Function key | Runs the orchestrator (Pattern A/B via `ORCHESTRATOR_PATTERN`) — agentic retrieval + reasoning + citations. ~10–15s. |
+| `POST /api/lookup` | Function key | Deterministic, metadata-only file-location lookup via a single `hybrid_search` call — no Foundry/MCP/LLM. Returns `metadata_storage_path`, `blob_url`, filename, policy number. ~1–2s. |
+| `GET /api/health` | Anonymous | Liveness probe — returns `{"status": "ok"}`. |
+
+`/api/lookup` is independent of the orchestrator (no Foundry dependency), so it
+works the same regardless of `ORCHESTRATOR_PATTERN`. It exists so Copilot Studio
+can route "where is this document?" questions to a fast, hallucination-free path
+while content questions still flow through `/api/ask`. See
+`docs/CopilotStudioLookupRouting.md`.
+
 ## Copilot Studio Integration
 
 The `copilot/manifest.json` defines the Copilot Studio extension pointing at
-the Azure Function `/api/ask` endpoint. The `copilot/openapi.yaml` provides
-the OpenAPI spec for the action. See `docs/CopilotStudioIntegration.md` for
-the full setup guide.
+the Azure Function endpoints. Specs and helpers in `copilot/`:
+
+- `openapi.yaml` — OpenAPI v3 action spec for `/api/ask`.
+- `openapi-v2.json` — Swagger 2.0 spec for `/api/ask` (Copilot Studio REST API
+  tools require v2; v3 gets a lossy auto-translation).
+- `openapi-lookup-v2.json` — Swagger 2.0 spec for the `/api/lookup`
+  file-location tool.
+- `quick_reference_guide.md` — glossary + policy-number index that powers the
+  client-side direct-answer (no-tool-call) path.
+
+See `docs/CopilotStudioIntegration.md` for the full setup guide,
+`docs/CopilotStudioLookupRouting.md` for the dual-tool (content + file-location)
+routing setup, and `docs/CopilotStudioAuth.md` for production Entra ID auth.
 
 ## Environment Variables
 
@@ -334,13 +370,44 @@ instrumentation libraries it pulls are still in beta):
 uv pip install --prerelease=allow 'azure-monitor-opentelemetry>=1.6.0,<2'
 ```
 
+## Cost Comparison (High Level)
+
+All Path 2 patterns share the **same fixed Azure AI Search floor** (the index,
+semantic ranker, agentic-retrieval tokens, storage) — that cost does **not**
+change with the orchestration choice. What differs is the **per-message backend
+cost**: how often a turn triggers an Azure Functions execution and Foundry model
+tokens. Ordered lowest → highest variable cost:
+
+| Rank | Pattern | Backend per turn | Relative variable cost | Trade-off |
+|------|---------|------------------|------------------------|-----------|
+| 1 | **Path 1 — Direct AI Search knowledge source** | None (Copilot Studio's built-in LLM) | **Lowest** | No agentic retrieval, no deterministic file paths |
+| 2 | **Copilot-orchestrated Hybrid** (over Pattern B) | Only retrieval turns hit the backend | **Lowest of Path 2** | Greetings/glossary/off-topic answered client-side — needs routing setup |
+| 3 | **Pattern B — Hybrid MCP + metadata lookup** | Every turn; file-location turns skip the model | **Medium** | Deterministic file paths; saving scales with file-location query mix |
+| 4 | **Pattern A — Single-agent MCP** | Every turn = full agentic pass | **High** | Best answer quality; full token cost on every turn |
+| 5 | **Multi-step pipeline** (`PIPELINE_MODE=multi_step`) | Every turn = double retrieval | **Highest** | Learning reference only — not for production |
+
+**Rule of thumb:** Pattern A is the simplest production default; Pattern B (and
+the Copilot-orchestrated hybrid on top of it) lowers backend cost without
+sacrificing answer quality by keeping non-retrieval traffic off the model. Path 1
+is cheapest but gives up agentic retrieval and deterministic file paths.
+
+See [`docs/CostComparison.md`](docs/CostComparison.md) for the full cost model,
+measured AI Search baseline, SKU tiers, and a worked per-message example.
+
 ## Further Documentation
 
 | Document | Description |
 |----------|-------------|
+| `docs/Walkthrough.md` | End-to-end walkthrough: upload → index → query, with per-pattern purpose and sample output |
+| `docs/RetrievalPatterns.md` | Hybrid search vs RAG vs agentic retrieval — when each applies |
 | `docs/FoundryAgentArchitecture.md` | MCP tool, pipeline modes, citation validation, agent instructions |
 | `docs/AgentArchitecturePaths.md` | Comparison of Foundry Agent Service vs Agent Framework paths |
-| `docs/FoundryAgentTesting.md` | How to test the pipeline locally and view results in Foundry Portal |
+| `docs/FoundryAgentTesting.md` | How to test the Foundry pipeline locally and view results in Foundry Portal |
+| `docs/AgentFrameworkAgentTesting.md` | How to test the preview Agent Framework pipeline and view its traces |
 | `docs/IntegratedVectorizationPipeline.md` | Indexing pipeline: skillset, chunking, projections, agentic retrieval |
 | `docs/CopilotStudioIntegration.md` | End-to-end Copilot Studio setup (Knowledge Source + Function Tool) |
+| `docs/CopilotStudioHybridExample.md` | Click-by-click hybrid build: Copilot Studio decides when to call the backend |
+| `docs/CopilotStudioLookupRouting.md` | Dual-tool routing (content knowledge source + `/api/lookup` file-location tool) |
+| `docs/CopilotStudioAuth.md` | Production Entra ID (Easy Auth) instead of static function keys |
+| `docs/CostComparison.md` | Detailed cost model and per-pattern cost breakdown |
 | `docs/MergeSkillRecommendations.md` | Why MergeSkill is disabled and query-time construction is preferred |

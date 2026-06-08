@@ -1,0 +1,159 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "HR Policy Document Lookup API",
+    "description": "Direct, deterministic file-location lookup for the HR policy knowledge base. Runs a single hybrid search against the Azure AI Search index and returns metadata fields ONLY (file path, blob URL, filename, parent title, policy number). No Foundry agent, no MCP, no LLM synthesis, so it returns in ~1-2 seconds instead of the slower agentic/RAG path. This is the standalone Pattern B file-location tool; pair it with the Azure AI Search knowledge source (or the askHRPolicy tool) for content questions.",
+    "version": "1.0.0"
+  },
+  "host": "func-hr-policy-kb-lab-dev.azurewebsites.net",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "functionKey": {
+      "type": "apiKey",
+      "in": "query",
+      "name": "code",
+      "description": "Azure Functions host/function key passed as the 'code' query string parameter. Retrieve with: az functionapp keys list -g rg-hr-policy-kb-lab-dev -n func-hr-policy-kb-lab-dev. In Copilot Studio, choose API key auth, parameter name 'code', location Query."
+    }
+  },
+  "security": [
+    {
+      "functionKey": []
+    }
+  ],
+  "paths": {
+    "/api/lookup": {
+      "post": {
+        "operationId": "lookupHRPolicyDocument",
+        "summary": "Look up where an HR policy document is stored",
+        "description": "Use this tool ONLY when the user asks WHERE a document is located, or asks for its file path, blob URL, link, storage location, or filename (for example: 'Where is the PTO policy stored?', 'What's the file path for the Holiday Pay policy?', 'Give me the link to the Code of Ethics document'). It returns exact metadata field values from the index with no answer synthesis. Do NOT use this tool for questions about what a policy SAYS, how it works, eligibility, amounts, deadlines, or process; route those to the HR policy knowledge source or content tool instead.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "security": [
+          {
+            "functionKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "top",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Maximum number of matching documents to return (1-10, default 3)."
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "The document the user is trying to locate.",
+            "schema": {
+              "$ref": "#/definitions/LookupRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching documents with metadata-only fields",
+            "schema": {
+              "$ref": "#/definitions/LookupResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "LookupRequest": {
+      "type": "object",
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Natural-language description of the document to locate (e.g., the policy name or number).",
+          "example": "Where is the PTO policy stored?"
+        }
+      }
+    },
+    "LookupResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "Processing status; 'completed' on success."
+        },
+        "user_query": {
+          "type": "string",
+          "description": "Echo of the query that was looked up."
+        },
+        "found": {
+          "type": "boolean",
+          "description": "True when at least one matching document was found."
+        },
+        "document_count": {
+          "type": "integer",
+          "description": "Number of documents returned."
+        },
+        "documents": {
+          "type": "array",
+          "description": "Matching documents, each with metadata-only fields.",
+          "items": {
+            "$ref": "#/definitions/LookupDocument"
+          }
+        }
+      }
+    },
+    "LookupDocument": {
+      "type": "object",
+      "properties": {
+        "metadata_storage_name": {
+          "type": "string",
+          "description": "Original filename of the policy document."
+        },
+        "metadata_storage_path": {
+          "type": "string",
+          "description": "Full storage path of the document in the index."
+        },
+        "blob_url": {
+          "type": "string",
+          "description": "Azure Blob Storage URL where the document is stored."
+        },
+        "parent_title": {
+          "type": "string",
+          "description": "Parent document title."
+        },
+        "policy_number": {
+          "type": "string",
+          "description": "Policy number (e.g., 51350)."
+        },
+        "reranker_score": {
+          "type": "number",
+          "description": "Semantic reranker relevance score for this match (higher is more relevant)."
+        }
+      }
+    }
+  }
+}

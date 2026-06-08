@@ -41,6 +41,10 @@ param searchSku string
 @allowed(['free', 'standard', 'disabled'])
 param semanticSearchTier string = 'standard'
 
+@description('Orchestrator pattern for the Function App: A (single-agent MCP) or B (hybrid MCP + metadata lookup)')
+@allowed(['A', 'B'])
+param orchestratorPattern string = 'A'
+
 @description('Enable VNet + Private Endpoints for production network isolation')
 param enablePrivateEndpoints bool = false
 
@@ -498,8 +502,11 @@ resource functionApp 'Microsoft.Web/sites@2024-11-01' = {
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
         { name: 'AZURE_CLIENT_ID', value: funcIdentity.properties.clientId }
         { name: 'AZURE_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
+        { name: 'AZURE_SEARCH_INDEX_NAME', value: 'hr_lab_index' }
         { name: 'AZURE_OPENAI_ENDPOINT', value: aiServices.properties.endpoint }
         { name: 'AZURE_AI_PROJECT_ENDPOINT', value: '${aiServices.properties.endpoint}/api/projects/${aiProject.name}' }
+        { name: 'AZURE_AI_MODEL_DEPLOYMENT_NAME', value: openAIDeploymentName }
+        { name: 'ORCHESTRATOR_PATTERN', value: orchestratorPattern }
         { name: 'AZURE_KEY_VAULT_URI', value: keyVault.properties.vaultUri }
         { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${environment().suffixes.storage}' }
       ]

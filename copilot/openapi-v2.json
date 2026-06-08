@@ -1,0 +1,169 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "HR Policy Knowledge Lab API",
+    "description": "REST API for the HR Policy Foundry Agent orchestrator. By default it runs Pattern A (single-agent MCP, ORCHESTRATOR_PATTERN=A): a single Foundry Agent with an MCPTool calls knowledge_base_retrieve against Azure AI Search and returns a grounded, citation-backed answer. Set ORCHESTRATOR_PATTERN=B for Pattern B (hybrid MCP + metadata lookup). The 4-step sequential pipeline is optional and enabled only via PIPELINE_MODE=multi_step.",
+    "version": "1.0.0"
+  },
+  "host": "func-hr-policy-kb-lab-dev.azurewebsites.net",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "functionKey": {
+      "type": "apiKey",
+      "in": "query",
+      "name": "code",
+      "description": "Azure Functions host/function key passed as the 'code' query string parameter. Retrieve with: az functionapp keys list -g rg-hr-policy-kb-lab-dev -n func-hr-policy-kb-lab-dev. In Copilot Studio, choose API key auth, parameter name 'code', location Query."
+    }
+  },
+  "security": [
+    {
+      "functionKey": []
+    }
+  ],
+  "paths": {
+    "/api/ask": {
+      "post": {
+        "operationId": "askHRPolicy",
+        "summary": "Ask an HR policy question",
+        "description": "Use this tool when the user asks WHAT an HR policy says, HOW it works, eligibility, amounts, deadlines, or process (PTO, leave, holiday pay, hiring, probation, dress code, IT/AI acceptable use, safety, code of ethics), or WHERE a policy document is stored (filename/blob path). It runs the Foundry Agent (Pattern A single-agent MCP by default; Pattern B adds a deterministic file-location lookup) and returns a grounded, citation-backed answer. Do NOT use this tool for greetings, acronym/policy-number glossary lookups (answer those from uploaded knowledge), or non-HR questions.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "security": [
+          {
+            "functionKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "The HR policy question to ask.",
+            "schema": {
+              "$ref": "#/definitions/AskRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful grounded response",
+            "schema": {
+              "$ref": "#/definitions/AskResponse"
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "AskRequest": {
+      "type": "object",
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Natural-language HR policy question.",
+          "example": "What is the PTO policy?"
+        }
+      }
+    },
+    "AskResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "Pipeline status (for example, 'completed')."
+        },
+        "user_query": {
+          "type": "string",
+          "description": "Echo of the submitted query."
+        },
+        "answer": {
+          "type": "string",
+          "description": "Grounded, citation-backed natural-language answer. Inline MCP citation annotations use the format \u3010message_idx:search_idx\u2020source_name\u3011. Present this answer to the user verbatim, including citation markers and any file paths."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Orchestrator pattern used ('A' or 'B')."
+        },
+        "pipeline_mode": {
+          "type": "string",
+          "description": "Pipeline mode used ('single_agent', 'pattern_b', or 'multi_step')."
+        },
+        "is_grounded": {
+          "type": "boolean",
+          "description": "Whether the answer is grounded in the knowledge base."
+        },
+        "matches": {
+          "type": "array",
+          "description": "Retrieval matches. Present only in multi-step mode (PIPELINE_MODE=multi_step).",
+          "items": {
+            "$ref": "#/definitions/Match"
+          }
+        },
+        "references": {
+          "type": "array",
+          "description": "Grounded citation references. Present only in multi-step mode (PIPELINE_MODE=multi_step).",
+          "items": {
+            "$ref": "#/definitions/Reference"
+          }
+        }
+      }
+    },
+    "Match": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "Retrieved content chunk."
+        },
+        "filePath": {
+          "type": "string",
+          "description": "Source document path."
+        },
+        "documentType": {
+          "type": "string",
+          "description": "Source document type."
+        },
+        "container": {
+          "type": "string",
+          "description": "Source blob container."
+        }
+      }
+    },
+    "Reference": {
+      "type": "object",
+      "properties": {
+        "filePath": {
+          "type": "string",
+          "description": "Cited document path."
+        },
+        "documentType": {
+          "type": "string",
+          "description": "Cited document type."
+        }
+      }
+    }
+  }
+}

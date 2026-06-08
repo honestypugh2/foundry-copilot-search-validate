@@ -174,7 +174,8 @@ The validation results are included in the response under the `citation_validati
 | `ORCHESTRATOR_PATTERN` | `A` | Pattern: `A` (single-agent MCP) or `B` (hybrid MCP + metadata lookup) |
 | `PIPELINE_MODE` | `single_agent` | Pipeline mode: `single_agent` (recommended) or `multi_step` (learning) |
 | `VALIDATE_CITATIONS` | `false` | Enable post-processing citation validation |
-| `PERSIST_FOUNDRY_AGENTS` | `false` | Keep Foundry Agents after invocation (otherwise cleaned up) |
+| `PERSIST_FOUNDRY_AGENTS` | `true` | When `false`, the orchestrator deletes the agent version it touched at the end of each run. Leave at `true` to keep agents visible in the portal. |
+| `RECREATE_FOUNDRY_AGENTS` | `false` | Force a new agent version on every invocation. Default is get-or-create (reuse the existing version) so the portal stops prompting "Save the Agent" between runs. |
 | `AZURE_AI_PROJECT_ENDPOINT` | — | Foundry project endpoint |
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | `gpt-5` | Model deployment for the agent |
 

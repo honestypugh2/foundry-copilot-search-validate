@@ -36,6 +36,10 @@ param searchSku string = 'basic'
 @allowed(['free', 'standard', 'disabled'])
 param semanticSearchTier string = 'standard'
 
+@description('Orchestrator pattern for the Function App: A (single-agent MCP) or B (hybrid MCP + metadata lookup)')
+@allowed(['A', 'B'])
+param orchestratorPattern string = 'A'
+
 @description('Enable VNet + Private Endpoints for production network isolation')
 param enablePrivateEndpoints bool = false
 
@@ -74,6 +78,7 @@ module resources './bicep/main.bicep' = {
     embeddingDeploymentName: embeddingDeploymentName
     searchSku: searchSku
     semanticSearchTier: semanticSearchTier
+    orchestratorPattern: orchestratorPattern
     enablePrivateEndpoints: enablePrivateEndpoints
     disableLocalAuth: disableLocalAuth
     enableFunctionAuth: enableFunctionAuth

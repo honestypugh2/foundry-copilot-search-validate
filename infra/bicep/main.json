@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.42.1.51946",
-      "templateHash": "1882956845321492782"
+      "version": "0.43.8.12551",
+      "templateHash": "12854308539025003190"
     }
   },
   "parameters": {
@@ -68,6 +68,17 @@
       ],
       "metadata": {
         "description": "Semantic ranker tier for Azure AI Search"
+      }
+    },
+    "orchestratorPattern": {
+      "type": "string",
+      "defaultValue": "A",
+      "allowedValues": [
+        "A",
+        "B"
+      ],
+      "metadata": {
+        "description": "Orchestrator pattern for the Function App: A (single-agent MCP) or B (hybrid MCP + metadata lookup)"
       }
     },
     "enablePrivateEndpoints": {
@@ -442,6 +453,28 @@
       ]
     },
     {
+      "type": "Microsoft.CognitiveServices/accounts/projects/connections",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}/{2}', format('{0}{1}', variables('abbrs').cognitiveServicesAccounts, variables('resourceToken')), format('{0}{1}', variables('abbrs').cognitiveServicesProjects, variables('resourceToken')), 'appInsightsConnection')]",
+      "properties": {
+        "category": "AppInsights",
+        "target": "[resourceId('Microsoft.Insights/components', format('{0}{1}', variables('abbrs').insightsComponents, variables('resourceToken')))]",
+        "authType": "ApiKey",
+        "isSharedToAll": true,
+        "metadata": {
+          "ApiType": "Azure",
+          "ResourceId": "[resourceId('Microsoft.Insights/components', format('{0}{1}', variables('abbrs').insightsComponents, variables('resourceToken')))]"
+        },
+        "credentials": {
+          "key": "[reference(resourceId('Microsoft.Insights/components', format('{0}{1}', variables('abbrs').insightsComponents, variables('resourceToken'))), '2020-02-02').ConnectionString]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', format('{0}{1}', variables('abbrs').cognitiveServicesAccounts, variables('resourceToken')), format('{0}{1}', variables('abbrs').cognitiveServicesProjects, variables('resourceToken')))]",
+        "[resourceId('Microsoft.Insights/components', format('{0}{1}', variables('abbrs').insightsComponents, variables('resourceToken')))]"
+      ]
+    },
+    {
       "type": "Microsoft.KeyVault/vaults",
       "apiVersion": "2024-11-01",
       "name": "[take(format('{0}{1}', variables('abbrs').keyVaultVaults, variables('resourceToken')), 24)]",
@@ -583,12 +616,24 @@
               "value": "[format('https://{0}.search.windows.net', format('{0}{1}', variables('abbrs').searchSearchServices, variables('resourceToken')))]"
             },
             {
+              "name": "AZURE_SEARCH_INDEX_NAME",
+              "value": "hr_lab_index"
+            },
+            {
               "name": "AZURE_OPENAI_ENDPOINT",
               "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}{1}', variables('abbrs').cognitiveServicesAccounts, variables('resourceToken'))), '2025-06-01').endpoint]"
             },
             {
               "name": "AZURE_AI_PROJECT_ENDPOINT",
               "value": "[format('{0}/api/projects/{1}', reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}{1}', variables('abbrs').cognitiveServicesAccounts, variables('resourceToken'))), '2025-06-01').endpoint, format('{0}{1}', variables('abbrs').cognitiveServicesProjects, variables('resourceToken')))]"
+            },
+            {
+              "name": "AZURE_AI_MODEL_DEPLOYMENT_NAME",
+              "value": "[parameters('openAIDeploymentName')]"
+            },
+            {
+              "name": "ORCHESTRATOR_PATTERN",
+              "value": "[parameters('orchestratorPattern')]"
             },
             {
               "name": "AZURE_KEY_VAULT_URI",
@@ -801,8 +846,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.42.1.51946",
-              "templateHash": "11272649970434853735"
+              "version": "0.43.8.12551",
+              "templateHash": "5148333829820463267"
             }
           },
           "parameters": {
