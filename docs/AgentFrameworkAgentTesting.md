@@ -288,12 +288,12 @@ PYTHONPATH=$PWD/src uv run python -m pytest tests/test_agents_af.py -v -s
 cd $PROJECT_ROOT
 source .env
 
-# Live mode
+# Live mode (no mocks — requires Azure credentials)
 PYTHONPATH=$PWD/src uv run python tests/e2e_live_agent_framework.py
-
-# Mock mode (validates wiring only)
-PYTHONPATH=$PWD/src uv run python tests/test_e2e_agent_framework.py --mock
 ```
+
+> The end-to-end script is live-only. For mock/wiring validation use the unit
+> test instead: `PYTHONPATH=$PWD/src uv run python -m pytest tests/test_agents_af.py --mock -v`.
 
 ---
 

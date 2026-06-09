@@ -16,27 +16,37 @@ Function endpoint (`/api/ask`) consumed by Copilot Studio.
                                          │ POST /api/ask
                           ┌──────────────▼──────────────┐
                           │  Azure Function (function_app.py)   │
+                          │  → agents.orchestrator_factory      │
+                          │     .get_orchestrator()             │
                           └──────────────┬──────────────┘
                                          │
-                 ┌───────────────────────┼───────────────────────┐
-                 │                       │                       │
-    ┌────────────▼────────────┐  ┌───────▼────────┐  ┌─────────▼──────────┐
-    │  Path 1: Agent Framework│  │  Path 2: Foundry│  │ Path 2b: Foundry   │
-    │  + FoundryChatClient    │  │  Agent Service  │  │  Agent Service     │
-    │  (agents_af/)           │  │  (agents/       │  │  (agents/          │
-    │                         │  │   sequential_   │  │   sequential_      │
-    │  SequentialBuilder      │  │   orchestrator  │  │   orchestrator_    │
-    │  Executors + Agent      │  │   .py)          │  │   foundry.py)      │
-    └─────────────────────────┘  └────────────────┘  └────────────────────┘
-                 │                       │                       │
-                 └───────────────────────┼───────────────────────┘
+                 ┌───────────────────────┴───────────────────────┐
+                 │                                               │
+    ┌────────────▼────────────┐         ┌────────────────────────▼────────────────────────┐
+    │  Path 1: Agent Framework│         │     Path 2: Foundry Agent Service (default)      │
+    │  + FoundryChatClient    │         │     agents/orchestrator_factory.py               │
+    │  (agents_af/            │         │     selected via ORCHESTRATOR_PATTERN (A | B)    │
+    │   sequential_           │         ├──────────────────────────┬──────────────────────┤
+    │   orchestrator.py)      │         │  Pattern A (default)     │  Pattern B           │
+    │                         │         │  sequential_orchestrator │  orchestrator_       │
+    │  SequentialBuilder      │         │  _foundry.py             │  pattern_b.py        │
+    │  Executors + Agent      │         │  Single-agent MCP        │  Hybrid MCP +        │
+    │                         │         │                          │  metadata lookup     │
+    └────────────┬────────────┘         └────────────┬─────────────────────────┬─────────┘
+                 │                                    │                         │
+                 └────────────────────────────────────┴─────────────────────────┘
                                          │
                           ┌──────────────▼──────────────┐
                           │  Azure AI Search             │
-                          │  Agentic Retrieval           │
-                          │  (KnowledgeBaseRetrievalClient)│
+                          │  Agentic Retrieval (MCP)     │
+                          │  hr_lab_index + knowledge base│
                           └──────────────────────────────┘
 ```
+
+> **Note:** Path 1 (`agents_af/`) is the **preview Agent Framework** path,
+> intended for testing only. Path 2 (`agents/`) is the **GA-only default**
+> selected by the Azure Function via `orchestrator_factory.get_orchestrator()`,
+> which reads the `ORCHESTRATOR_PATTERN` environment variable.
 
 ---
 
@@ -134,7 +144,7 @@ src/agents_af/
 **Directory:** `src/agents/`
 
 **SDK packages:**
-- `azure-ai-projects` (≥2.0.0) — AIProjectClient, PromptAgentDefinition, MCPTool, conversations, responses
+- `azure-ai-projects` 2.2.0 — AIProjectClient, PromptAgentDefinition, MCPTool, conversations, responses
 
 ### How it works
 
@@ -142,14 +152,24 @@ Uses the `azure-ai-projects` SDK directly to create and invoke Foundry
 Agents via the conversations + responses API. Agents are registered as
 PromptAgent definitions in the Foundry Portal and invoked at runtime.
 
-The **default mode** (`PIPELINE_MODE=single_agent`) uses a single Foundry Agent
-with an MCPTool pointing to the Azure AI Search knowledge base MCP endpoint.
-`tool_choice="required"` ensures the agent always retrieves from the knowledge base.
+The Azure Function selects the orchestrator through the factory, which reads
+the `ORCHESTRATOR_PATTERN` environment variable (default `A`):
 
-An optional **multi-step mode** (`PIPELINE_MODE=multi_step`) runs a 4-step pipeline
-using Python async/await orchestration (no SequentialBuilder).
+```python
+from agents.orchestrator_factory import get_orchestrator
+orchestrator = get_orchestrator()  # ORCHESTRATOR_PATTERN: A | B
+```
 
-### Orchestrator: `sequential_orchestrator_foundry.py`
+| `ORCHESTRATOR_PATTERN` | Orchestrator | File | Behavior |
+|------------------------|--------------|------|----------|
+| `A` (default) | `FoundryAgentOrchestrator` | `sequential_orchestrator_foundry.py` | Single-agent MCP — one Foundry Agent + MCPTool with `tool_choice="required"` |
+| `B` | `PatternBOrchestrator` | `orchestrator_pattern_b.py` | Hybrid — client-side classification routes file-location queries to a direct metadata lookup and content queries to the MCP agent |
+
+Within Pattern A, the `PIPELINE_MODE` environment variable selects the
+sub-mode: `single_agent` (default, MS recommended) or `multi_step` (legacy
+4-step pipeline kept as a learning reference).
+
+### Pattern A orchestrator: `sequential_orchestrator_foundry.py`
 
 Coordinates the pipeline directly with Python `async/await` using
 `AIProjectClient` → MCPTool + `tool_choice="required"`.
@@ -182,7 +202,7 @@ async with AIProjectClient(endpoint=endpoint, credential=credential) as client:
     )
 ```
 
-### Pipeline steps (both sub-paths)
+### Pattern A multi-step pipeline (`PIPELINE_MODE=multi_step`)
 
 | Step | Agent | Type | Purpose |
 |------|-------|------|---------|
@@ -190,6 +210,25 @@ async with AIProjectClient(endpoint=endpoint, credential=credential) as client:
 | 2 | `SourceValidatorAgent` | Foundry Agent (GPT-4.1) | Deterministic filter + trust assessment |
 | 3 | `ReferenceValidatorAgent` | Foundry Agent (GPT-4.1) | Citation extraction + grounding |
 | 4 | `AnswerSynthesisAgent` | Foundry Agent (GPT-4.1) | Answer synthesis (or agentic passthrough) |
+
+> The default `single_agent` mode skips steps 1–3; the single Foundry Agent +
+> MCPTool performs retrieval, reasoning, and citation in one pass.
+
+### Pattern B orchestrator: `orchestrator_pattern_b.py`
+
+`PatternBOrchestrator` uses **client-side query classification** (regex) to
+route each query to the optimal path:
+
+- **Content questions** ("What does Policy 51350 say?") → `HRPolicyAgentB`
+  Foundry Agent with MCPTool only (platform handles MCP natively, full citations)
+- **File-location questions** ("Where is the PTO policy stored?") →
+  `file_metadata_lookup` direct index search (bypasses MCP), then the no-tools
+  `HRPolicyAgentB-FileLocation` agent formats the deterministic result
+
+This yields **deterministic file paths** (no LLM hallucination of metadata
+fields) while keeping native MCP citations for content queries. The Azure
+Function also exposes a standalone `/api/lookup` endpoint that performs the
+same metadata lookup with no Foundry/MCP/LLM dependency.
 
 ### Key characteristics
 
@@ -214,12 +253,14 @@ AZURE_SEARCH_INDEX_NAME=hr_lab_index
 src/agents/
 ├── __init__.py
 ├── foundry_client.py                  # Shared AIProjectClient + OpenAI helpers
+├── orchestrator_factory.py            # get_orchestrator() — reads ORCHESTRATOR_PATTERN
 ├── register_agents.py                 # One-time Foundry Agent registration script
 ├── retrieval_agent.py                 # Agentic retrieval / hybrid search
 ├── source_validator_agent.py          # Foundry Agent: source trust assessment
 ├── reference_validator_agent.py       # Foundry Agent: grounding quality
 ├── answer_synthesis_agent.py          # Foundry Agent: answer synthesis
-└── sequential_orchestrator_foundry.py # Foundry-native orchestrator (single-agent MCP default)
+├── sequential_orchestrator_foundry.py # Pattern A — single-agent MCP (default)
+└── orchestrator_pattern_b.py          # Pattern B — hybrid MCP + metadata lookup
 ```
 
 ---
@@ -228,9 +269,9 @@ src/agents/
 
 | Feature | Path 1 (Agent Framework) | Path 2 (Foundry Agent Service) |
 |---------|-------------------------|-------------------------------|
-| **SDK** | `agent-framework-foundry` | `azure-ai-projects` (≥2.0.0) |
+| **SDK** | `agent-framework-foundry` | `azure-ai-projects` 2.2.0 |
 | **LLM client** | `FoundryChatClient` | `AIProjectClient` → conversations/responses |
-| **Orchestration** | `SequentialBuilder` (built-in) | SequentialBuilder **or** Python async |
+| **Orchestration** | `SequentialBuilder` (built-in) | Python `async/await` via `orchestrator_factory` (Pattern A / B) |
 | **Agent definition** | App-owned (in code) | Service-managed (Foundry Portal) |
 | **Agent persistence** | Ephemeral per workflow | Persistent in Foundry Portal |
 | **Deterministic steps** | Custom `Executor`s | Python functions |
@@ -250,7 +291,7 @@ Both paths share:
 | **Agentic Retrieval** | `hr-knowledge-source` + `hr-knowledge-base` |
 | **Azure OpenAI** | GPT-4.1 deployment |
 | **Azure Blob Storage** | `ask-hr-knowledge` container |
-| **Azure Function** | `/api/ask` endpoint |
+| **Azure Function** | `/api/ask`, `/api/lookup`, `/api/health` endpoints |
 | **Copilot Studio** | `manifest.json` + `openapi.yaml` |
 | **Config** | `src/config/search_config.json` |
 
@@ -258,23 +299,35 @@ Both paths share:
 
 ## Switching Paths
 
-### Default: FoundryAgentOrchestrator (single-agent MCP)
+### Default: Foundry Agent Service via the factory
 
-The Azure Function (`function_app.py`) defaults to the Foundry orchestrator:
+The Azure Function (`function_app.py`) selects the orchestrator through the
+factory, which honors the `ORCHESTRATOR_PATTERN` environment variable:
 
 ```python
-from agents.sequential_orchestrator_foundry import FoundryAgentOrchestrator
+# function_app.py
+from agents.orchestrator_factory import get_orchestrator
+orchestrator = get_orchestrator()  # ORCHESTRATOR_PATTERN: A (default) | B
+```
+
+```bash
+# .env
+ORCHESTRATOR_PATTERN=A   # Pattern A — single-agent MCP (default)
+ORCHESTRATOR_PATTERN=B   # Pattern B — hybrid MCP + metadata lookup
 ```
 
 ### Switch to Agent Framework path
+
+The Agent Framework path is not wired into the factory; import it directly
+(testing only):
 
 ```python
 from agents_af.sequential_orchestrator import SequentialWorkflowOrchestrator
 ```
 
-### Configure pipeline mode
+### Configure Pattern A pipeline mode
 
-Use the `PIPELINE_MODE` environment variable:
+Within Pattern A, use the `PIPELINE_MODE` environment variable:
 
 ```python
 # .env
@@ -290,35 +343,36 @@ PIPELINE_MODE=multi_step     # Legacy 4-step pipeline (learning reference)
 
 ```bash
 # Agent Framework agents
-PYTHONPATH=$PWD/src pytest src/tests/test_agents_af.py -v
+PYTHONPATH=$PWD/src pytest tests/test_agents_af.py -v
 
 # Foundry Agent Service agents
-PYTHONPATH=$PWD/src pytest src/tests/test_agents_foundry.py -v
+PYTHONPATH=$PWD/src pytest tests/test_agents_foundry.py -v
 
 # Azure Function / Copilot Studio contract
-PYTHONPATH=$PWD/src pytest src/tests/test_function_copilot.py -v
+PYTHONPATH=$PWD/src pytest tests/test_function_copilot.py -v
 ```
 
-### End-to-end tests (requires Azure credentials)
+### End-to-end tests (live — requires Azure credentials, no mocks)
 
 ```bash
 # Agent Framework path
-PYTHONPATH=$PWD/src python src/tests/test_e2e_agent_framework.py
+PYTHONPATH=$PWD/src python tests/e2e_live_agent_framework.py
 
 # Foundry Agent Service path
-PYTHONPATH=$PWD/src python src/tests/test_e2e_foundry_service.py
+PYTHONPATH=$PWD/src python tests/e2e_live_foundry_service.py
 
 # Full flow (original)
-PYTHONPATH=$PWD/src python src/tests/test_full_flow.py
-
-# Mock mode (no Azure)
-PYTHONPATH=$PWD/src python src/tests/test_e2e_agent_framework.py --mock
-PYTHONPATH=$PWD/src python src/tests/test_e2e_foundry_service.py --mock
+PYTHONPATH=$PWD/src python tests/test_full_flow.py
 ```
 
-### Query retrieval tests (22 specific document lookups)
+### Query retrieval tests
 
 ```bash
-PYTHONPATH=$PWD/src python src/tests/test_query_retrieval.py        # live
-PYTHONPATH=$PWD/src python src/tests/test_query_retrieval.py --mock # mock
+# 22 specific document lookups
+PYTHONPATH=$PWD/src python tests/test_query_retrieval.py        # live
+PYTHONPATH=$PWD/src python tests/test_query_retrieval.py --mock # mock
+
+# MCP query retrieval — Pattern A / Pattern B
+PYTHONPATH=$PWD/src python tests/test_mcp_query_retrieval.py --pattern A
+PYTHONPATH=$PWD/src python tests/test_mcp_query_retrieval.py --pattern B
 ```

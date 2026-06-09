@@ -196,13 +196,13 @@ The project includes an end-to-end test that exercises the full pipeline:
 cd $PROJECT_ROOT
 source .env
 
-PYTHONPATH=$PWD/src uv run python src/tests/test_full_flow.py
+PYTHONPATH=$PWD/src uv run python tests/test_full_flow.py
 ```
 
 Add `--mock` to run without Azure credentials (uses mock data):
 
 ```bash
-PYTHONPATH=$PWD/src uv run python src/tests/test_full_flow.py --mock
+PYTHONPATH=$PWD/src uv run python tests/test_full_flow.py --mock
 ```
 
 ---
