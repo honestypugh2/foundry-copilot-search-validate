@@ -34,6 +34,7 @@ import logging
 import os
 import re
 import asyncio
+from contextlib import AsyncExitStack
 from typing import Any, Dict
 from pathlib import Path
 
@@ -44,6 +45,51 @@ from azure.identity.aio import DefaultAzureCredential
 from search.azure_ai_search_client import AzureAISearchClient
 from agents.foundry_client import _ensure_foundry_agent
 from observability import enable_tracing
+
+# Lightweight, dependency-free stage timer from the latency toolkit. Used to
+# attribute client-side wall-clock time to explicit pipeline boundaries
+# (client setup, agent ensure, conversation create, agent response, activity
+# capture, cleanup). Imported defensively so the orchestrator never fails if
+# the educational latency package is unavailable.
+try:
+    from latency.profiler import StageTimer  # type: ignore[no-redef]
+    from latency.models import (
+        STAGE_ACTIVITY_CAPTURE,
+        STAGE_AGENT_DELETE,
+        STAGE_AGENT_ENSURE,
+        STAGE_AGENT_RESPONSE,
+        STAGE_CLIENT_SETUP,
+        STAGE_CONVERSATION_CREATE,
+        STAGE_CONVERSATION_DELETE,
+    )
+
+    _STAGE_TIMING_AVAILABLE = True
+except Exception:  # pragma: no cover - latency toolkit is optional
+    _STAGE_TIMING_AVAILABLE = False
+
+    from contextlib import contextmanager as _contextmanager
+
+    class StageTimer:  # type: ignore[no-redef]
+        """No-op fallback when the latency toolkit is unavailable."""
+
+        def __init__(self) -> None:
+            self._stages: list = []
+
+        @_contextmanager
+        def measure(self, name: str, **metadata: Any):
+            yield
+
+        @property
+        def stages(self) -> list:
+            return []
+
+    STAGE_CLIENT_SETUP = "client_setup"
+    STAGE_AGENT_ENSURE = "agent_ensure"
+    STAGE_CONVERSATION_CREATE = "conversation_create"
+    STAGE_AGENT_RESPONSE = "agent_response"
+    STAGE_ACTIVITY_CAPTURE = "activity_capture"
+    STAGE_CONVERSATION_DELETE = "conversation_delete"
+    STAGE_AGENT_DELETE = "agent_delete"
 
 logger = logging.getLogger(__name__)
 
@@ -262,36 +308,58 @@ class FoundryAgentOrchestrator:
 
         The agent handles retrieval, reasoning, and citation formatting
         in one pass.
+
+        Client-side wall-clock time is attributed to explicit stages via a
+        :class:`~latency.profiler.StageTimer` so the latency investigation can
+        see exactly where time is spent (client setup, agent ensure,
+        conversation create, agent response, activity capture, cleanup). The
+        recorded stages are returned under ``result["stage_timings"]``.
         """
+        timer = StageTimer()
         credential = DefaultAzureCredential(exclude_environment_credential=True)
 
-        async with (
-            credential,
-            AIProjectClient(
-                endpoint=self.project_endpoint, credential=credential
-            ) as project_client,
-            project_client.get_openai_client() as openai_client,
-        ):
-            # Get-or-create agent with MCP tool. Reusing the existing
-            # version avoids minting a new draft every run, which is what
-            # caused the Foundry portal to prompt "Save the Agent" on every
-            # click.  Set RECREATE_FOUNDRY_AGENTS=true to force a new version
+        async with AsyncExitStack() as stack:
+            # ---- Stage: client setup (credential + clients) --------------
+            with timer.measure(STAGE_CLIENT_SETUP):
+                await stack.enter_async_context(credential)
+                project_client = await stack.enter_async_context(
+                    AIProjectClient(
+                        endpoint=self.project_endpoint, credential=credential
+                    )
+                )
+                openai_client = await stack.enter_async_context(
+                    project_client.get_openai_client()
+                )
+
+            # ---- Stage: agent ensure (get-or-create + version) -----------
+            # Reusing the existing version avoids minting a new draft every
+            # run.  Set RECREATE_FOUNDRY_AGENTS=true to force a new version
             # (e.g. after editing instructions).
             mcp_tool = self._build_mcp_tool()
-            agent = await _ensure_foundry_agent(
-                project_client,
-                agent_name="HRPolicyAgent",
-                definition=PromptAgentDefinition(
-                    model=self.deployment_name,
-                    instructions=self._build_instructions(),
-                    tools=[mcp_tool],
-                ),
-            )
+            with timer.measure(STAGE_AGENT_ENSURE):
+                agent = await _ensure_foundry_agent(
+                    project_client,
+                    agent_name="HRPolicyAgent",
+                    definition=PromptAgentDefinition(
+                        model=self.deployment_name,
+                        instructions=self._build_instructions(),
+                        tools=[mcp_tool],
+                    ),
+                )
 
+            result: Dict[str, Any] = {}
+            conversation = None
             try:
-                conversation = await openai_client.conversations.create()
+                # ---- Stage: conversation create --------------------------
+                with timer.measure(STAGE_CONVERSATION_CREATE):
+                    conversation = await openai_client.conversations.create()
 
-                try:
+                # ---- Stage: agent response (LLM reasoning + MCP tool) ----
+                # This is the model's reasoning/answer-synthesis pass: it
+                # plans sub-queries, calls the knowledge-base MCP tool, and
+                # streams the synthesized answer. For reasoning models in
+                # ANSWER_SYNTHESIS mode this is normally the dominant cost.
+                with timer.measure(STAGE_AGENT_RESPONSE, model=self.deployment_name):
                     answer_text = ""
                     token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
@@ -331,7 +399,12 @@ class FoundryAgentOrchestrator:
 
                     answer = answer_text or "The agent did not produce a response."
 
-                    # Capture subqueries/activity via direct agentic retrieval
+                # ---- Stage: activity capture (extra agentic_retrieve) ----
+                # NOTE: this is a SECOND retrieval call made purely to expose
+                # the service-side activity[] breakdown for observability. It
+                # duplicates the agent's own MCP retrieval, so it adds latency
+                # and should be disabled/sampled in production.
+                with timer.measure(STAGE_ACTIVITY_CAPTURE):
                     activity = []
                     try:
                         ar_result = self._search_client.agentic_retrieve(
@@ -341,49 +414,61 @@ class FoundryAgentOrchestrator:
                     except Exception as e:
                         logger.debug("Activity capture failed (non-blocking): %s", e)
 
-                    result: Dict[str, Any] = {
-                        "status": "completed",
-                        "user_query": user_query,
-                        "answer": answer,
-                        "model": self.deployment_name,
-                        "output_mode": self._output_mode.lower(),
-                        "pipeline_mode": "single_agent",
-                        "pattern": "A",
-                        "is_grounded": True,
-                        "token_usage": token_usage,
-                        "activity": activity,
-                        "steps": {
-                            "mcp_retrieval_and_synthesis": {
-                                "status": "completed",
-                                "model": self.deployment_name,
-                                "output_mode": self._output_mode.lower(),
-                            }
-                        },
-                    }
+                result = {
+                    "status": "completed",
+                    "user_query": user_query,
+                    "answer": answer,
+                    "model": self.deployment_name,
+                    "output_mode": self._output_mode.lower(),
+                    "pipeline_mode": "single_agent",
+                    "pattern": "A",
+                    "is_grounded": True,
+                    "token_usage": token_usage,
+                    "activity": activity,
+                    "steps": {
+                        "mcp_retrieval_and_synthesis": {
+                            "status": "completed",
+                            "model": self.deployment_name,
+                            "output_mode": self._output_mode.lower(),
+                        }
+                    },
+                }
 
-                    # Optional citation validation
-                    if self._validate_citations:
-                        validation = self._validate_citation_annotations(answer)
-                        result["citation_validation"] = validation
-                        if not validation["has_citations"]:
-                            logger.warning(
-                                "Citation validation: no MCP annotations found in response"
-                            )
-
-                    return result
-
-                finally:
-                    await openai_client.conversations.delete(
-                        conversation_id=conversation.id
-                    )
+                # Optional citation validation
+                if self._validate_citations:
+                    validation = self._validate_citation_annotations(answer)
+                    result["citation_validation"] = validation
+                    if not validation["has_citations"]:
+                        logger.warning(
+                            "Citation validation: no MCP annotations found in response"
+                        )
             finally:
+                # ---- Stage: conversation delete --------------------------
+                if conversation is not None:
+                    with timer.measure(STAGE_CONVERSATION_DELETE):
+                        await openai_client.conversations.delete(
+                            conversation_id=conversation.id
+                        )
+                # ---- Stage: agent delete (only when not persisting) ------
                 persist = (
                     os.getenv("PERSIST_FOUNDRY_AGENTS", "true").lower() == "true"
                 )
                 if not persist:
-                    await project_client.agents.delete_version(
-                        agent_name=agent.name, agent_version=agent.version
-                    )
+                    with timer.measure(STAGE_AGENT_DELETE):
+                        await project_client.agents.delete_version(
+                            agent_name=agent.name, agent_version=agent.version
+                        )
+
+            # Attach client-side stage timings for the latency investigation.
+            result["stage_timings"] = [
+                {
+                    "name": s.name,
+                    "duration_ms": s.duration_ms,
+                    "metadata": s.metadata,
+                }
+                for s in timer.stages
+            ]
+            return result
 
     # ==================================================================
     # OPTIONAL: Citation validation (post-processing)
